@@ -1,17 +1,9 @@
 from sqlalchemy import select
-from sqlalchemy.orm import declarative_base, Mapped, mapped_column
 
-Base = declarative_base()
-class Item(Base):
-    __tablename__ = "items"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column()
-
-    def __repr__(self):
-        return f"Item(id={self.id} name={self.name})"
+from models import Item
 
 class TestBasic:
-    def test_add_get_delete(self, SessionFactory):
+    def test_simple_add_get_delete(self, SessionFactory):
         with SessionFactory() as session:
             item = Item(id=1, name="foo")
             session.add(item)
@@ -27,6 +19,9 @@ class TestBasic:
             assert len(items) == 1
             assert items[0].id == 1
             assert items[0].name == "foo"
+
+            item = session.get(Item, 1)
+            assert item is not None
 
             session.delete(item)
 
@@ -57,7 +52,7 @@ class TestBasic:
                 assert items[0].name == "bar"
 
 
-    async def test_async_add_get_delete(self, AsyncSessionFactory):
+    async def test_async_simple_add_get_delete(self, AsyncSessionFactory):
         async with AsyncSessionFactory() as session:
             item = Item(id=1, name="foo")
             session.add(item)
@@ -74,6 +69,9 @@ class TestBasic:
             assert len(items) == 1
             assert items[0].id == 1
             assert items[0].name == "foo"
+
+            item = await session.get(Item, 1)
+            assert item is not None
 
             await session.delete(item)
 

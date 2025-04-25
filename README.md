@@ -7,12 +7,18 @@ Ideal for rapid prototyping, backtesting, and demos-no external database require
 
 ---
 
+## Why ?
+
+This project was inspired by the idea of creating a fast, introspectable, no-dependency backend for SQLAlchemy. Useful for prototyping, education, and testing ORM logic without spinning up a real database engine.
+
+It's also perfect for apps that need a fast, in-memory store compatible with SQLAlchemy, such as backtesting engines, simulators, or tools where you don't want to maintain a separate memory layer alongside your database models.
+
 ## Features
 
-- **Zero setup**: just `create_engine("memory://")`
-- **Full SQLAlchemy 2.0 support**: ORM & Core, sync & async modes   
-- **High performance**: no de/serialization overhead
-- **Pure‑Python store**: built on simple `dict`/`list` buffers under the hood  
+- **SQLAlchemy 2.0 support**: ORM & Core expressions, sync & async modes
+- **Zero I/O overhead**: pure in‑RAM storage (`dict`/`list` under the hood)
+- **Commit/rollback support**
+- **Merge and `get()` support**: like real SQLAlchemy behavior
 
 ---
 
@@ -25,11 +31,16 @@ pip install sqlalchemy-memory
 ## Quickstart
 
 ```python
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base, Mapped, mapped_column, select
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker, declarative_base, Mapped, mapped_column
+from sqlalchemy_memory import MemorySession
 
-engine  = create_engine("memory://", future=True)
-Session = sessionmaker(engine, future=True)
+engine = create_engine("memory://")
+Session = sessionmaker(
+    engine,
+    class_=MemorySession,
+    expire_on_commit=False,
+)
 
 Base = declarative_base()
 
@@ -37,6 +48,8 @@ class Item(Base):
     __tablename__ = "items"
     id:   Mapped[int]    = mapped_column(primary_key=True)
     name: Mapped[str]    = mapped_column()
+    def __repr__(self):
+        return f"Item(id={self.id} name={self.name})"
 
 Base.metadata.create_all(engine)
 
@@ -50,6 +63,7 @@ session.commit()
 
 # Query (no SQL under the hood: objects come straight back)
 items = session.scalars(select(Item)).all()
+print("Items", items)
 assert items[0] is item
 assert items[0].name == "foo"
 
@@ -60,6 +74,74 @@ session.commit()
 # Confirm gone
 assert session.scalars(select(Item)).all() == []
 ```
+
+## Quickstart (async)
+
+```python
+import asyncio
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.orm import sessionmaker, declarative_base, Mapped, mapped_column
+from sqlalchemy_memory import MemorySession, AsyncMemorySession
+
+engine = create_async_engine("memory+asyncio://")
+Session = sessionmaker(
+    engine,
+    class_=AsyncMemorySession,
+    sync_session_class=MemorySession,
+    expire_on_commit=False,
+)
+
+Base = declarative_base()
+
+class Item(Base):
+    __tablename__ = "items"
+    id:   Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column()
+
+    def __repr__(self):
+        return f"Item(id={self.id} name={self.name})"
+
+Base.metadata.create_all(engine.sync_engine)
+
+async def main():
+    async with Session() as session:
+        # Add & commit
+        item = Item(id=1, name="foo")
+        session.add(item)
+        await session.commit()
+
+        # Query (no SQL under the hood: objects come straight back)
+        items = (await session.scalars(select(Item))).all()
+        print("Items", items)
+        assert items[0] is item
+        assert items[0].name == "foo"
+
+        # Delete & commit
+        await session.delete(item)
+        await session.commit()
+
+        # Confirm gone
+        assert (await session.scalars(select(Item))).all() == []
+
+asyncio.run(main())
+```
+
+## Status
+
+Currently supports basic functionality equivalent to:
+
+- SQLite in-memory behavior for ORM + Core queries
+
+- `declarative_base()` model support
+
+Coming soon:
+
+- `func.count()` / aggregations
+
+- Joins and relationships (limited)
+
+- Better expression support in `update(...).values()` (e.g., +=)
 
 ## Testing
 

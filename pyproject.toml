@@ -1,0 +1,11 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sqlalchemy_memory"
+version = "0.0.1"
+
+[project.entry-points."sqlalchemy.dialects"]
+"memory"         = "sqlalchemy_memory.base:MemoryDialect"
+"memory.asyncio" = "sqlalchemy_memory.asyncio:AsyncMemoryDialect"

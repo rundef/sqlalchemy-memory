@@ -1,24 +1,18 @@
-from .session import MemorySession
+from .store import InMemoryStore
 from .cursor import MemoryCursor
 
 class MemoryDBAPIConnection:
-    """
-    Emulates a raw DBAPI connection for the in-memory store.
-    Attaches a MemorySession for transactional operations.
-    """
     def __init__(self):
-        self.data = {}
-        self._snapshot = {}
-        self.session = MemorySession(self)
+        self.store = InMemoryStore()
 
     def cursor(self):
         return MemoryCursor(self)
 
     def commit(self):
-        self.session.commit()
+        self.store.commit()
 
     def rollback(self):
-        self.session.rollback()
+        self.store.rollback()
 
     def close(self):
         pass

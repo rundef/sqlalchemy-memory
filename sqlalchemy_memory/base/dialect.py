@@ -4,9 +4,6 @@ import copy
 
 from .connection import MemoryDBAPIConnection
 from ..util import _raw_dbapi_connection
-from ..events import register_events
-
-register_events()
 
 class MemoryDialect(default.DefaultDialect):
     name = "memory"
@@ -27,28 +24,28 @@ class MemoryDialect(default.DefaultDialect):
     @classmethod
     def import_dbapi(cls, **kwargs):
         # Provide a dummy DBAPI module
-        module = types.SimpleNamespace()
-        module.paramstyle = "named"
-        module.apilevel = "2.0"
-        module.threadsafety = 1
-        module.Error = Exception
-
-        def connect(*args, **kw):
-            return MemoryDBAPIConnection()
-
-        module.connect = connect
-
+        module = types.SimpleNamespace(
+            paramstyle="named",
+            apilevel="2.0",
+            threadsafety=1,
+            Error=Exception
+        )
+        module.connect = lambda *a, **k: MemoryDBAPIConnection()
         return module
 
     def do_begin(self, dbapi_conn):
-        raw = _raw_dbapi_connection(dbapi_conn)
-        raw._snapshot = copy.deepcopy(raw.data)
+        connection = _raw_dbapi_connection(dbapi_conn)
+        connection.store._snapshot = copy.deepcopy(connection.store.data)
 
     def do_commit(self, dbapi_conn):
-        raw = _raw_dbapi_connection(dbapi_conn)
-        raw.session.commit()
+        connection = _raw_dbapi_connection(dbapi_conn)
+        connection.store.commit()
 
     def do_rollback(self, dbapi_conn):
-        raw = _raw_dbapi_connection(dbapi_conn)
-        raw.data = raw._snapshot
-        raw.session.rollback()
+        connection = _raw_dbapi_connection(dbapi_conn)
+        connection.store.data = connection.store._snapshot
+        connection.store.rollback()
+
+    def has_table(self, *args, **kwargs):
+        # Patch to make Base.metadata.create_all(engine) not throw any exception
+        return True

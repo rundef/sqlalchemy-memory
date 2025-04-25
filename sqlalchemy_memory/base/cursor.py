@@ -9,6 +9,8 @@ class MemoryCursor:
         self.rowcount = -1
 
     def execute(self, statement, parameters=None):
+        print("EXECUTE", statement)
+        assert False
         return self
 
     def fetchall(self):

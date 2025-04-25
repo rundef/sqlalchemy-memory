@@ -1,30 +1,56 @@
-from sqlalchemy.sql.elements import BinaryExpression, BindParameter, True_, False_, Null
+from sqlalchemy.sql.elements import UnaryExpression, BinaryExpression, BindParameter, True_, False_, Null
 from sqlalchemy.sql.functions import FunctionElement
 from sqlalchemy.sql import operators
+from sqlalchemy.sql.annotation import AnnotatedTable
 from functools import cached_property
 from operator import eq
 
-class MemoryQuery:
-    def __init__(self, session, model, items, active_items=None):
-        self._session = session
-        self._model = model
-        self._items = items
-        self._active_items = active_items
-        self._filtered = None
-        self._conditions = []
+from sqlalchemy.orm.query import Query
+
+class MemoryQuery(Query):
+    def __init__(self, entities, element):
+        super().__init__(entities, element)
+        assert len(entities) == 1, "Only single table queries are supported"
+
+        self._model = entities[0]
+
+        self._where_criteria = []
+        self._order_by = []
+        self._limit = None
+        self._offset = None
 
     @cached_property
     def tablename(self):
+        if isinstance(self._model, AnnotatedTable):
+            return self._model.name
         return self._model.__tablename__
 
+    def first(self):
+        items = self._execute_query()
+        return items[0] if items else None
+
+    def all(self):
+        items = self._execute_query()
+        return items
+
     def filter(self, condition):
-        self._conditions.append(condition)
+        self._where_criteria.append(condition)
+        return self
+
+    def limit(self, value):
+        self._limit = value
+        return self
+
+    def offset(self, value):
+        self._offset = value
+        return self
+
+    def order_by(self, clause):
+        self._order_by.append(clause)
         return self
 
     def _extract_json_value(self, data_dict, path):
-        """
-        Traverse nested keys for a JSON path like 'ref.abc.xyz'
-        """
+        # Traverse nested keys for a JSON path like 'ref.abc.xyz'
         current = data_dict or {}
         for key in path.split('.'):
             if not isinstance(current, dict):
@@ -101,57 +127,36 @@ class MemoryQuery:
         ]
 
     def _execute_query(self):
-        collection = self._items
+        collection = self.session.store.data.get(self.tablename, [])
+        if not collection:
+            return collection
 
-        # 1) Performance shortcut: look for an `active == True` filter
-        if self._active_items is not None:
-            for cond in self._conditions:
-                if (
-                    isinstance(cond, BinaryExpression)
-                    and cond.left.name == "active"
-                    and cond.left.table.description == self.tablename
-                    and cond.operator is eq
-                    and (
-                        (isinstance(cond.right, BindParameter) and cond.right.value is True)
-                        or isinstance(cond.right, True_)
-                    )
-                ):
-
-                    collection = self._active_items
-                    self._conditions.remove(cond)
-                    break
-
-        # 2) Apply all remaining conditions
-        for condition in self._conditions:
+        # Apply conditions
+        for condition in self._where_criteria:
             collection = self._apply_condition(condition, collection)
 
-        self._filtered = collection
+        # Apply order by
+        for clause in reversed(self._order_by or []):
+            reverse = False
 
-    def first(self):
-        if self._filtered is None:
-            self._execute_query()
+            if isinstance(clause, UnaryExpression):
+                if clause.modifier is operators.desc_op:
+                    reverse = True
+                elif clause.modifier is operators.asc_op:
+                    reverse = False
+                col = clause.element
+            else:
+                col = clause
 
-        return self._filtered[0] if self._filtered else None
+            attr = col.name
+            collection.sort(key=lambda x: getattr(x, attr), reverse=reverse)
 
-    def all(self):
-        if self._filtered is None:
-            self._execute_query()
+        # Apply offset
+        if self._offset is not None:
+            collection = collection[self._offset:]
 
-        return self._filtered
+        # Apply limit
+        if self._limit is not None:
+            collection = collection[:self._limit]
 
-    def update(self, values: dict) -> int:
-        matches = self.all()
-
-        for obj in matches:
-            for col, new_val in values.items():
-                # derive the attribute name from the ColumnElement
-                # SQLAlchemy InstrumentedAttribute has .key; ColumnElements have .name
-                attr = getattr(col, "key", None) or getattr(col, "name", None)
-                if not attr:
-                    raise ValueError(f"Cannot derive attribute for {col!r}")
-                setattr(obj, attr, new_val)
-
-            # buffer the merge so commit() can move things like active->inactive
-            self._session.merge(obj)
-
-        return len(matches)
+        return collection
