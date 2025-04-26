@@ -29,9 +29,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Database :: Front-Ends",
-    "Topic :: Software Development :: Libraries",
-    "Framework :: SQLAlchemy",
-    "Framework :: SQLAlchemy :: 2.0",
+    "Topic :: Software Development :: Libraries"
 ]
 keywords = [
     "sqlalchemy",
