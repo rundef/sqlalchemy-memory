@@ -5,3 +5,5 @@ __all__ = [
     "MemorySession",
     "AsyncMemorySession",
 ]
+
+__version__ = '0.1.0'

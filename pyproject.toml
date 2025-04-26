@@ -3,8 +3,52 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sqlalchemy_memory"
-version = "0.0.1"
+name = "sqlalchemy-memory"
+version = "0.1.0"
+dependencies = [
+    "sqlalchemy>=2.0,<3.0",
+]
+description = "In-memory SQLAlchemy 2.0 dialect for blazing‑fast prototyping."
+readme = "README.md"
+requires-python = ">=3.7"
+license = { text = "MIT" }
+authors = [
+  { name="Mickael Burguet" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database :: Front-Ends",
+    "Topic :: Software Development :: Libraries",
+    "Framework :: SQLAlchemy",
+    "Framework :: SQLAlchemy :: 2.0",
+]
+keywords = [
+    "sqlalchemy",
+    "in-memory database",
+    "memory store",
+    "prototype",
+    "testing",
+    "python orm",
+    "sqlalchemy dialect",
+    "sqlite alternative",
+    "lightweight database",
+]
+
+[project.urls]
+Homepage = "https://github.com/rundef/sqlalchemy-memory"
+Repository = "https://github.com/rundef/sqlalchemy-memory"
+Issues = "https://github.com/rundef/sqlalchemy-memory/issues"
 
 [project.entry-points."sqlalchemy.dialects"]
 "memory"         = "sqlalchemy_memory.base:MemoryDialect"

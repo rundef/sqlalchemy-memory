@@ -1,9 +1,12 @@
-from sqlalchemy.sql.elements import UnaryExpression, BinaryExpression, BindParameter, True_, False_, Null
+from sqlalchemy.sql.elements import (
+    UnaryExpression, BinaryExpression, BindParameter, ExpressionClauseList,
+    True_, False_, Null
+)
 from sqlalchemy.sql.functions import FunctionElement
 from sqlalchemy.sql import operators
 from sqlalchemy.sql.annotation import AnnotatedTable
 from functools import cached_property
-from operator import eq
+import fnmatch
 
 from sqlalchemy.orm.query import Query
 
@@ -74,6 +77,11 @@ class MemoryQuery(Query):
             value = False
         elif isinstance(rhs, Null):
             value = None
+        elif isinstance(rhs, ExpressionClauseList):
+            value = tuple(
+                clause.value if isinstance(clause, BindParameter) else clause
+                for clause in rhs.clauses
+            )
         else:
             raise NotImplementedError(f"Unsupported RHS: {type(rhs)}")
 
@@ -120,6 +128,28 @@ class MemoryQuery(Query):
                 op = lambda x, y: x is None
             elif op is operators.isnot:
                 op = lambda x, y: x is not None
+
+        elif op is operators.like_op:
+            fnmatch_pattern = value.replace('%', '*').replace('_', '?')
+            op = lambda x, y: fnmatch.fnmatchcase(x or '', fnmatch_pattern)
+
+        elif op is operators.not_like_op:
+            fnmatch_pattern = value.replace('%', '*').replace('_', '?')
+            op = lambda x, y: not fnmatch.fnmatchcase(x or '', fnmatch_pattern)
+
+        elif op is operators.between_op:
+            low, high = value
+            op = lambda x, _: low <= x <= high
+
+        elif op is operators.not_between_op:
+            low, high = value
+            op = lambda x, _: not (low <= x <= high)
+
+        elif op is operators.in_op:
+            op = lambda x, y: x in y
+
+        elif op is operators.not_in_op:
+            op = lambda x, y: x not in y
 
         return [
             item for item in collection
