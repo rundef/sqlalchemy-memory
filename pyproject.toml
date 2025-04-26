@@ -10,7 +10,7 @@ dependencies = [
 ]
 description = "In-memory SQLAlchemy 2.0 dialect for blazing‑fast prototyping."
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.8"
 license = { text = "MIT" }
 authors = [
   { name="Mickael Burguet" }

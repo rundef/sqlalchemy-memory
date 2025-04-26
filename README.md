@@ -1,11 +1,14 @@
 # sqlalchemy-memory
 
+[![PyPI - Version](https://img.shields.io/pypi/v/sqlalchemy-memory)](https://pypi.org/project/sqlalchemy-memory/)
+[![CI](https://github.com/rundef/sqlalchemy-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/rundef/sqlalchemy-memory/actions/workflows/ci.yml)
+[![PyPI - Downloads](https://img.shields.io/pypi/dm/sqlalchemy-memory)](https://pypistats.org/packages/sqlalchemy-memory)
+
+
 **In‑memory SQLAlchemy 2.0 dialect for blazing‑fast prototyping**  
 
 A pure‑Python, zero‑configuration SQLAlchemy 2.0 dialect that lives entirely in RAM.
 Ideal for rapid prototyping, backtesting, and demos-no external database required.
-
----
 
 ## Why ?
 
@@ -19,8 +22,6 @@ It's also perfect for apps that need a fast, in-memory store compatible with SQL
 - **Zero I/O overhead**: pure in‑RAM storage (`dict`/`list` under the hood)
 - **Commit/rollback support**
 - **Merge and `get()` support**: like real SQLAlchemy behavior
-
----
 
 ## Installation
 
