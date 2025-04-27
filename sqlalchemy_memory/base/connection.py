@@ -10,8 +10,3 @@ class MemoryDBAPIConnection:
     def close(self):
         pass
 
-    @classmethod
-    def connect(cls, store, *args, **kwargs):
-        connection = MemoryDBAPIConnection()
-        connection.store = store
-        return connection
