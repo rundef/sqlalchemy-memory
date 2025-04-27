@@ -1,4 +1,4 @@
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_, or_
 from datetime import datetime, date
 import pytest
 
@@ -176,13 +176,6 @@ class TestAdvanced:
         ]
     )
     def test_date_filter(self, SessionFactory, operator, value, expected_ids):
-        """
-        stmt = select(NetLiquidationValue).where(
-                func.DATE(NetLiquidationValue.created_at) == _date
-            )
-
-        """
-
         with SessionFactory() as session:
             session.add_all([
                 Product(id=1, name="foo", created_at=datetime(2025, 1, 1, 1, 1, 1)),
@@ -202,6 +195,43 @@ class TestAdvanced:
 
             results = session.execute(stmt).scalars().all()
             assert {item.id for item in results} == expected_ids
+
+    def test_and_or(self, SessionFactory):
+        with SessionFactory() as session:
+            session.add_all([
+                Product(id=1, name="foo", category="A"),
+                Product(id=2, name="bar", category="B"),
+                Product(id=3, name="foobar", category="B"),
+                Product(id=4, name="barfoo", category="B"),
+                Product(id=5, name="boofar", category="A"),
+            ])
+            session.commit()
+
+            stmt = (
+                select(Product)
+                .where(
+                    (Product.id > 1) & (
+                        (Product.id < 4) | (Product.category == "A")
+                    )
+                )
+            )
+            results = session.execute(stmt).scalars().all()
+            assert {item.id for item in results} == {2, 3, 5}
+
+            stmt = (
+                select(Product)
+                .where(
+                    and_(
+                        Product.id > 1,
+                        or_(
+                            Product.id < 4,
+                            Product.category == "A"
+                        )
+                    )
+                )
+            )
+            results = session.execute(stmt).scalars().all()
+            assert {item.id for item in results} == {2, 3, 5}
 
     def test_session_inception(self, SessionFactory):
         with SessionFactory() as session1:

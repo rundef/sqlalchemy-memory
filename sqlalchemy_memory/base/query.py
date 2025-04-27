@@ -1,6 +1,6 @@
 from sqlalchemy.sql.elements import (
-    UnaryExpression, BinaryExpression, BindParameter, ExpressionClauseList,
-    True_, False_, Null
+    UnaryExpression, BinaryExpression, BindParameter, ExpressionClauseList, BooleanClauseList,
+    Grouping, True_, False_, Null
 )
 from sqlalchemy.sql.functions import FunctionElement
 from sqlalchemy.sql import operators
@@ -70,10 +70,27 @@ class MemoryQuery(Query):
         self._order_by.append(clause)
         return self
 
-    def _apply_condition(self, cond, collection):
-        if not isinstance(cond, BinaryExpression):
-            raise NotImplementedError(f"Unsupported condition type: {type(cond)}")
+    def _apply_boolean_condition(self, cond: BooleanClauseList, collection):
+        op = cond.operator  # and_ or or_
 
+        # Recursively evaluate each sub-condition
+        subresults = [
+            set(self._apply_condition(subcond, collection))
+            for subcond in cond.clauses
+        ]
+
+        if op is operators.and_:
+            # Intersection: item must satisfy all sub-conditions
+            result = set.intersection(*subresults)
+        elif op is operators.or_:
+            # Union: item can satisfy any sub-condition
+            result = set.union(*subresults)
+        else:
+            raise NotImplementedError(f"Unsupported BooleanClauseList operator: {op}")
+
+        return list(result)
+
+    def _apply_binary_condition(self, cond: BinaryExpression, collection):
         # Extract the Python value it's being compared to
         rhs = cond.right
         if isinstance(rhs, BindParameter):
@@ -123,6 +140,21 @@ class MemoryQuery(Query):
             item for item in collection
             if op(accessor(item, attr_name), value)
         ]
+
+    def _apply_condition(self, cond, collection):
+        if isinstance(cond, Grouping):
+            # Unwrap
+            return self._apply_condition(cond.element, collection)
+
+        if isinstance(cond, BinaryExpression):
+            # Represent an expression that is ``LEFT <operator> RIGHT``
+            return self._apply_binary_condition(cond, collection)
+
+        if isinstance(cond, BooleanClauseList):
+            # and_ / or_ expressions
+            return self._apply_boolean_condition(cond, collection)
+
+        raise NotImplementedError(f"Unsupported condition type: {type(cond)}")
 
     def _execute_query(self):
         collection = self.session.store.data.get(self.tablename, [])
