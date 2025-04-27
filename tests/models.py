@@ -1,5 +1,6 @@
 from sqlalchemy.orm import declarative_base, mapped_column, Mapped
-from sqlalchemy import JSON
+from sqlalchemy import JSON, func, text
+from datetime import datetime
 
 Base = declarative_base()
 
@@ -17,8 +18,13 @@ class Product(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     active: Mapped[bool] = mapped_column(default=True, index=True)
     name: Mapped[str] = mapped_column(nullable=False)
-    category: Mapped[str] = mapped_column(nullable=False, index=True)
+    category: Mapped[str] = mapped_column(index=True, server_default=text("unknown"))
     data: Mapped[dict] = mapped_column(JSON)
+
+    created_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(),
+        nullable=False
+    )
 
     def __repr__(self):
         return f"Product(id={self.id} name={self.name})"

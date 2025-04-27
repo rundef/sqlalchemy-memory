@@ -27,6 +27,8 @@ Unlike traditional in-memory solutions like SQLite, `sqlalchemy-memory` fully av
 
 It is also perfect for **applications that need a lightweight, high-performance store** compatible with SQLAlchemy, such as backtesting engines, simulators, or other tools where you don't want to maintain a separate in-memory layer alongside your database models.
 
+Data is kept purely in RAM and is **volatile**: it is **not persisted across application restarts** and is **cleared when the engine is disposed**.
+
 ## Features
 
 - **SQLAlchemy 2.0 support**: ORM & Core expressions, sync & async modes

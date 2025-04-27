@@ -1,4 +1,7 @@
 from collections import defaultdict
+from sqlalchemy import func
+from sqlalchemy.sql.elements import TextClause
+from datetime import datetime
 
 from ..logger import logger
 
@@ -80,6 +83,8 @@ class InMemoryStore:
                 if pk_value in self.data_by_pk[tablename].keys():
                     raise Exception(f"Cannot have duplicate PK value {pk_value} for table '{tablename}'")
 
+                self._apply_column_defaults(obj)
+
                 logger.debug(f"Adding {obj} to table '{tablename}'")
 
                 self.data[tablename].append(obj)
@@ -155,3 +160,37 @@ class InMemoryStore:
             self._pk_counter[table] = max(self._pk_counter[table], current_id)
 
         return current_id
+
+    def _apply_column_defaults(self, obj):
+        """
+        Apply default and server_default values to an ORM object.
+        """
+
+        for column in obj.__table__.columns:
+            attr_name = column.name
+            current_value = getattr(obj, attr_name, None)
+
+            if current_value is not None:
+                continue
+
+            elif column.default is not None:
+                if callable(column.default.arg):
+                    try:
+                        value = column.default.arg()
+                    except TypeError:
+                        value = column.default.arg(ctx=None)
+                else:
+                    value = column.default.arg
+
+                setattr(obj, attr_name, value)
+
+            elif column.server_default is not None:
+                if isinstance(column.server_default.arg, TextClause):
+                    text_value = column.server_default.arg.text
+                    setattr(obj, attr_name, text_value)
+
+                elif isinstance(column.server_default.arg, func.now().__class__):
+                    setattr(obj, attr_name, datetime.utcnow())
+
+                else:
+                    raise Exception(f"Unhandled server_default type: {type(column.server_default)}")

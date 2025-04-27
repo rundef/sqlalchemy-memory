@@ -1,4 +1,5 @@
 from sqlalchemy import select, func
+from datetime import datetime, date
 import pytest
 
 from models import Item, Product
@@ -113,6 +114,91 @@ class TestAdvanced:
             stmt = select(Product).where(
                 func.json_extract(Product.data, pattern) == value
             )
+
+            results = session.execute(stmt).scalars().all()
+            assert {item.id for item in results} == expected_ids
+
+    def test_default_values(self, SessionFactory):
+        dt = datetime(2025, 1, 1, 2, 3, 4)
+
+        with SessionFactory() as session:
+            session.add_all([
+                Product(id=5, name="foo", category="A"),
+                Product(name="bar", active=False, created_at=dt),
+            ])
+            session.commit()
+
+            products = session.execute(select(Product)).scalars().all()
+
+            assert products[0].active
+            assert products[0].created_at is not None
+            assert products[0].category == "A"
+
+            assert products[1].id == 6
+            assert not products[1].active
+            assert products[1].created_at == dt
+            assert products[1].category == "unknown"
+
+    @pytest.mark.parametrize(
+        "operator, value, expected_ids",
+        [
+            ("is", True, {1, 3}),
+            ("is_not", True, {2}),
+            ("is", False, {2}),
+            ("is_not", False, {1, 3}),
+        ]
+    )
+    def test_is_filter(self, SessionFactory, operator, value, expected_ids):
+        with SessionFactory() as session:
+            session.add_all([
+                Product(id=1, name="foo", active=True),
+                Product(id=2, name="bar", active=False),
+                Product(id=3, name="foobar", active=True),
+            ])
+            session.commit()
+
+            stmt = select(Product)
+            if operator == "is":
+                stmt = stmt.where(Product.active.is_(value))
+            else:
+                stmt = stmt.where(Product.active.is_not(value))
+
+            results = session.execute(stmt).scalars().all()
+            assert {item.id for item in results} == expected_ids
+
+    @pytest.mark.parametrize(
+        "operator, value, expected_ids",
+        [
+            ("==", date(2025, 1, 1), {1}),
+            ("!=", date(2025, 1, 2), {1, 3, 4}),
+            (">", date(2025, 1, 2), {3, 4}),
+            (">", date(2025, 1, 10), set()),
+        ]
+    )
+    def test_date_filter(self, SessionFactory, operator, value, expected_ids):
+        """
+        stmt = select(NetLiquidationValue).where(
+                func.DATE(NetLiquidationValue.created_at) == _date
+            )
+
+        """
+
+        with SessionFactory() as session:
+            session.add_all([
+                Product(id=1, name="foo", created_at=datetime(2025, 1, 1, 1, 1, 1)),
+                Product(id=2, name="bar", created_at=datetime(2025, 1, 2, 2, 2, 2)),
+                Product(id=3, name="foobar", created_at=datetime(2025, 1, 3, 3, 3, 3)),
+                Product(id=4, name="barfoo", created_at=datetime(2025, 1, 4, 4, 4, 4)),
+            ])
+            session.commit()
+
+            stmt = select(Product)
+            if operator == "==":
+                stmt = stmt.where(func.DATE(Product.created_at) == value)
+            elif operator == "!=":
+                stmt = stmt.where(func.DATE(Product.created_at) != value)
+            elif operator == ">":
+                stmt = stmt.where(func.DATE(Product.created_at) > value)
 
             results = session.execute(stmt).scalars().all()
             assert {item.id for item in results} == expected_ids
