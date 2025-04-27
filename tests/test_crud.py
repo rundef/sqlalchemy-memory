@@ -153,14 +153,25 @@ class TestCRUD:
         with SessionFactory() as session:
             with session.begin():
                 session.merge(detached)
-                item = session.get(Item, 1)
-                assert item is not None
-                assert item.name == "foo"
 
-                session.commit()
                 item = session.get(Item, 1)
                 assert item is not None
-                assert item.name == "foo-modified"
+                assert item.name == "foo-modified"  # updated immediately
+
+                session.rollback()
+
+            with session.begin():
+                item = session.get(Item, 1)
+                assert item is not None
+                assert item.name == "foo"  # rollback: restored to old value
+
+                session.merge(detached)
+                session.commit()
+
+            with session.begin():
+                item = session.get(Item, 1)
+                assert item is not None
+                assert item.name == "foo-modified"  # change now persisted
 
     def test_delete(self, SessionFactory):
         with SessionFactory() as session:

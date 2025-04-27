@@ -17,6 +17,7 @@ registry.register("memory.asyncio", "sqlalchemy_memory.asyncio", "AsyncMemoryDia
 @pytest.fixture
 def SessionFactory():
     engine = create_engine("memory://")
+
     Base.metadata.create_all(engine)
 
     yield sessionmaker(
@@ -38,6 +39,5 @@ async def AsyncSessionFactory():
         engine,
         class_=AsyncMemorySession,
         sync_session_class=MemorySession,
-        future=True,
         expire_on_commit=False,
     )

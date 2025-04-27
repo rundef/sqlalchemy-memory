@@ -37,19 +37,17 @@ class TestBasic:
 
     def test_rollback(self, SessionFactory):
         with SessionFactory() as session:
-            with session.begin():
-                session.add(Item(id=1, name="foo"))
-                session.rollback()
+            session.add(Item(id=1, name="foo"))
+            session.rollback()
 
-            with session.begin():
-                session.add(Item(id=2, name="bar"))
+            session.add(Item(id=2, name="bar"))
+            session.commit()
 
-            with session.begin():
-                items = session.scalars(select(Item)).all()
+            items = session.scalars(select(Item)).all()
 
-                assert len(items) == 1
-                assert items[0].id == 2
-                assert items[0].name == "bar"
+            assert len(items) == 1
+            assert items[0].id == 2
+            assert items[0].name == "bar"
 
 
     async def test_async_simple_add_get_delete(self, AsyncSessionFactory):
@@ -87,17 +85,14 @@ class TestBasic:
 
     async def test_async_rollback(self, AsyncSessionFactory):
         async with AsyncSessionFactory() as session:
+            session.add(Item(id=1, name="foo"))
+            await session.rollback()
 
-            async with session.begin():
-                session.add(Item(id=1, name="foo"))
-                await session.rollback()
+            session.add(Item(id=2, name="bar"))
+            await session.commit()
 
-            async with session.begin():
-                session.add(Item(id=2, name="bar"))
+            items = (await session.scalars(select(Item))).all()
 
-            async with session.begin():
-                items = (await session.scalars(select(Item))).all()
-
-                assert len(items) == 1
-                assert items[0].id == 2
-                assert items[0].name == "bar"
+            assert len(items) == 1
+            assert items[0].id == 2
+            assert items[0].name == "bar"

@@ -116,3 +116,12 @@ class TestAdvanced:
 
             results = session.execute(stmt).scalars().all()
             assert {item.id for item in results} == expected_ids
+
+    def test_session_inception(self, SessionFactory):
+        with SessionFactory() as session1:
+            session1.add(Item(id=1, name="foo"))
+            session1.commit()
+
+            with SessionFactory() as session2:
+                results = session2.execute(select(Item)).scalars().all()
+                assert len(results) == 1

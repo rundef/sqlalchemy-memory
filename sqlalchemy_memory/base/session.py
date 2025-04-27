@@ -5,6 +5,7 @@ from sqlalchemy.engine import IteratorResult
 from sqlalchemy.engine.cursor import SimpleResultMetaData
 
 from .query import MemoryQuery
+from ..logger import logger
 
 class MemorySession(Session):
     def __init__(self, *args, **kwargs):
@@ -163,6 +164,8 @@ class MemorySession(Session):
         return result
 
     def execute(self, statement, params=None, **kwargs):
+        #logger.debug(f"Executing query: {statement}")
+
         if isinstance(statement, Select):
             return self._handle_select(statement, **kwargs)
 
@@ -183,17 +186,19 @@ class MemorySession(Session):
         """
 
         pk_name = self.store._get_primary_key_name(instance)
-        id = getattr(instance, pk_name)
-        existing = self.store.get_by_primary_key(instance, id)
+        pk_value = getattr(instance, pk_name)
+        existing = self.store.get_by_primary_key(instance, pk_value)
 
         if existing:
-            data = {
-                col.name: getattr(instance, col.name)
-                for col in instance.__table__.columns
-                if col.name != pk_name
-            }
+            self.store.mark_as_fetched(existing)
 
-            self.store.update(instance.__tablename__, id, data)
+            for column in instance.__table__.columns:
+                field = column.name
+                if field == pk_name:
+                    continue
+                value = getattr(instance, field)
+                setattr(existing, field, value)
+
             return existing
 
         else:
@@ -207,7 +212,9 @@ class MemorySession(Session):
         pass
 
     def rollback(self, **kwargs):
+        logger.debug("Rolling back ...")
         self.store.rollback()
 
     def commit(self):
+        logger.debug("Committing ...")
         self.store.commit()

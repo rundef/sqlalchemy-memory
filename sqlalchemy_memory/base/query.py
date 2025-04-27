@@ -5,10 +5,28 @@ from sqlalchemy.sql.elements import (
 from sqlalchemy.sql.functions import FunctionElement
 from sqlalchemy.sql import operators
 from sqlalchemy.sql.annotation import AnnotatedTable
+from sqlalchemy.orm.query import Query
 from functools import cached_property
 import fnmatch
 
-from sqlalchemy.orm.query import Query
+from ..logger import logger
+from .resolvers import DateResolver, JsonExtractResolver
+
+OPERATOR_ADAPTERS = {
+    operators.is_: lambda value: lambda x, _: x is value,
+    operators.isnot: lambda value: lambda x, _: x is not value,
+    operators.like_op: lambda value: lambda x, _: fnmatch.fnmatchcase(x or '', value.replace('%', '*').replace('_', '?')),
+    operators.not_like_op: lambda value: lambda x, _: not fnmatch.fnmatchcase(x or '', value.replace('%', '*').replace('_', '?')),
+    operators.between_op: lambda bounds: lambda x, _: bounds[0] <= x <= bounds[1],
+    operators.not_between_op: lambda bounds: lambda x, _: not (bounds[0] <= x <= bounds[1]),
+    operators.in_op: lambda values: lambda x, _: x in values,
+    operators.not_in_op: lambda values: lambda x, _: x not in values,
+}
+
+FUNCTION_RESOLVERS = {
+    "date": DateResolver,
+    "json_extract": JsonExtractResolver,
+}
 
 class MemoryQuery(Query):
     def __init__(self, entities, element):
@@ -52,17 +70,6 @@ class MemoryQuery(Query):
         self._order_by.append(clause)
         return self
 
-    def _extract_json_value(self, data_dict, path):
-        # Traverse nested keys for a JSON path like 'ref.abc.xyz'
-        current = data_dict or {}
-        for key in path.split('.'):
-            if not isinstance(current, dict):
-                return None
-            current = current.get(key)
-            if current is None:
-                return None
-        return current
-
     def _apply_condition(self, cond, collection):
         if not isinstance(cond, BinaryExpression):
             raise NotImplementedError(f"Unsupported condition type: {type(cond)}")
@@ -85,34 +92,21 @@ class MemoryQuery(Query):
         else:
             raise NotImplementedError(f"Unsupported RHS: {type(rhs)}")
 
-        # Handle JSON extraction: func.json_extract(column, path)
-        if isinstance(cond.left, FunctionElement) and cond.left.name.lower() == 'json_extract':
-            args = list(cond.left.clauses)
-            column_expr, path_expr = args[0], args[1]
-            attr_name = column_expr.name
-            # Determine raw path string
-            raw = path_expr.value if hasattr(path_expr, 'value') else str(path_expr).strip('"')
+        col = cond.left
+        accessor = lambda obj, attr_name: getattr(obj, attr_name)
 
-            # Strip leading '$.' or '$'
-            if raw.startswith('$.'):
-                raw_path = raw[2:]
-            elif raw.startswith('$'):
-                raw_path = raw[1:]
-            else:
-                raw_path = raw
+        if isinstance(cond.left, FunctionElement):
+            fn_name = cond.left.name.lower()
+            if fn_name not in FUNCTION_RESOLVERS:
+                raise NotImplementedError(f"Unsupported LHS function: {fn_name}")
 
-            # Compare nested value
-            op = cond.operator
-            return [
-                item for item in collection
-                if op(
-                    self._extract_json_value(getattr(item, attr_name), raw_path),
-                    value
-                )
-            ]
+            clauses = list(cond.left.clauses)
+            col = clauses[0]
+            _class = FUNCTION_RESOLVERS[fn_name]
+            _resolver = _class(clauses[1:])
+            accessor = _resolver.accessor
 
         # Extract column name (LHS) and operator
-        col = cond.left
         if not hasattr(col, "name"):
             raise NotImplementedError(f"Unsupported LHS: {col}")
         attr_name = col.name
@@ -122,43 +116,18 @@ class MemoryQuery(Query):
 
         op = cond.operator
 
-        # special‑case SQL "IS NULL" and "IS NOT NULL"
-        if value is None:
-            if op is operators.is_:
-                op = lambda x, y: x is None
-            elif op is operators.isnot:
-                op = lambda x, y: x is not None
-
-        elif op is operators.like_op:
-            fnmatch_pattern = value.replace('%', '*').replace('_', '?')
-            op = lambda x, y: fnmatch.fnmatchcase(x or '', fnmatch_pattern)
-
-        elif op is operators.not_like_op:
-            fnmatch_pattern = value.replace('%', '*').replace('_', '?')
-            op = lambda x, y: not fnmatch.fnmatchcase(x or '', fnmatch_pattern)
-
-        elif op is operators.between_op:
-            low, high = value
-            op = lambda x, _: low <= x <= high
-
-        elif op is operators.not_between_op:
-            low, high = value
-            op = lambda x, _: not (low <= x <= high)
-
-        elif op is operators.in_op:
-            op = lambda x, y: x in y
-
-        elif op is operators.not_in_op:
-            op = lambda x, y: x not in y
+        if op in OPERATOR_ADAPTERS:
+            op = OPERATOR_ADAPTERS[op](value)
 
         return [
             item for item in collection
-            if op(getattr(item, attr_name), value)
+            if op(accessor(item, attr_name), value)
         ]
 
     def _execute_query(self):
         collection = self.session.store.data.get(self.tablename, [])
         if not collection:
+            logger.debug(f"Table '{self.tablename}' is empty")
             return collection
 
         # Apply conditions
@@ -178,8 +147,7 @@ class MemoryQuery(Query):
             else:
                 col = clause
 
-            attr = col.name
-            collection.sort(key=lambda x: getattr(x, attr), reverse=reverse)
+            collection = sorted(collection, key=lambda x: getattr(x, col.name), reverse=reverse)
 
         # Apply offset
         if self._offset is not None:

@@ -1,8 +1,5 @@
-from .store import InMemoryStore
-
 class MemoryDBAPIConnection:
-    def __init__(self):
-        self.store = InMemoryStore()
+    store = None
 
     def commit(self):
         self.store.commit()
@@ -12,3 +9,9 @@ class MemoryDBAPIConnection:
 
     def close(self):
         pass
+
+    @classmethod
+    def connect(cls, store, *args, **kwargs):
+        connection = MemoryDBAPIConnection()
+        connection.store = store
+        return connection
