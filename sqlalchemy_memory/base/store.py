@@ -13,43 +13,19 @@ class InMemoryStore:
         self.data = defaultdict(list)
         self.data_by_pk = defaultdict(dict)
 
-        # Uncommitted inserts/deletes/updates
-        self._to_add = defaultdict(list)
-        self._to_delete = defaultdict(list)
-        self._to_update = defaultdict(list)
+        # Non-committed inserts/deletes/updates
+        self._to_add = {}
+        self._to_delete = {}
+        self._to_update = {}
 
-        self._fetched = defaultdict(dict)
+        self._fetched = {}
 
         # Auto increment counter per table
         self._pk_counter = defaultdict(int)
 
-    def add(self, obj):
-        tablename = obj.__tablename__
-        if not any(id(x) == id(obj) for x in self._to_add[tablename]):
-            self._to_add[tablename].append(obj)
-
-    def delete(self, obj):
-        tablename = obj.__tablename__
-        self._to_delete[tablename].append(obj)
-
-    def update(self, tablename, pk_value, data):
-        self._to_update[tablename].append((pk_value, data))
-
-    def mark_as_fetched(self, instance):
-        tablename = instance.__tablename__
-
-        pk_name = self._get_primary_key_name(instance)
-        pk_value = getattr(instance, pk_name)
-
-        if pk_value in self._fetched[tablename]:
-            # Don't mark as fetched again
-            return
-
-        original_values = {
-            col.name: getattr(instance, col.name)
-            for col in instance.__table__.columns
-        }
-        self._fetched[tablename][pk_value] = original_values
+    @property
+    def dirty(self):
+        return bool(self._to_add or self._to_delete or self._to_update)
 
     def commit(self):
         # apply deletes

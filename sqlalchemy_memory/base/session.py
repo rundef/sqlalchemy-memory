@@ -3,25 +3,54 @@ from sqlalchemy.sql.selectable import Select
 from sqlalchemy.sql.dml import Insert, Delete, Update
 from sqlalchemy.engine import IteratorResult
 from sqlalchemy.engine.cursor import SimpleResultMetaData
+from functools import lru_cache
+from collections import defaultdict
 
 from .query import MemoryQuery
 from ..logger import logger
+
 
 class MemorySession(Session):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._query_cls = MemoryQuery
+        self._has_pending_merge = False
+        self.store = self.get_bind().dialect._store
 
-    @property
-    def raw_connection(self):
-        return self.connection().connection.dbapi_connection
+        # Non-committed inserts/deletes/updates
+        self._to_add = defaultdict(list)
+        self._to_delete = defaultdict(list)
+        self._to_update = defaultdict(list)
 
-    @property
-    def store(self):
-        return self.raw_connection.store
+        self._fetched = defaultdict(dict)
 
-    def add(self, instance, **kwargs):
-        self.store.add(instance)
+    def add(self, obj, **kwargs):
+        tablename = obj.__tablename__
+        if not any(id(x) == id(obj) for x in self._to_add[tablename]):
+            self._to_add[tablename].append(obj)
+
+    def delete(self, obj):
+        tablename = obj.__tablename__
+        self._to_delete[tablename].append(obj)
+
+    def update(self, tablename, pk_value, data):
+        self._to_update[tablename].append((pk_value, data))
+
+    def _mark_as_fetched(self, instance):
+        tablename = instance.__tablename__
+
+        pk_name = self.store._get_primary_key_name(instance)
+        pk_value = getattr(instance, pk_name)
+
+        if pk_value in self._fetched[tablename]:
+            # Don't mark as fetched again
+            return
+
+        original_values = {
+            col.name: getattr(instance, col.name)
+            for col in instance.__table__.columns
+        }
+        self._fetched[tablename][pk_value] = original_values
 
     def get(self, entity, id, **kwargs):
         """
@@ -29,7 +58,7 @@ class MemorySession(Session):
         """
         instance = self.store.get_by_primary_key(entity, id)
         if instance:
-            self.store.mark_as_fetched(instance)
+            self._mark_as_fetched(instance)
         return instance
 
     def scalars(self, statement, **kwargs):
@@ -38,16 +67,25 @@ class MemorySession(Session):
     def scalar(self, statement, **kwargs):
         return self.execute(statement, **kwargs).scalar()
 
-    def _handle_select(self, statement: Select, **kwargs):
-        # Detect single‑entity selects: select(MyModel)
-        cd = statement.column_descriptions
-        if len(cd) != 1 or cd[0]["entity"] is None:
-            raise Exception("Model not found")
+    @staticmethod
+    @lru_cache(maxsize=256)
+    def _get_metadata_for_annotated_table(annotated_table):
+        """
+        Build minimal cursor metadata
+        """
+        col_names = [col.name for col in annotated_table._columns]
+        return SimpleResultMetaData([
+            (col_name, None, None, None, None, None, None)
+            for col_name in col_names
+        ])
 
-        model = cd[0]["entity"]
+
+    def _handle_select(self, statement: Select, **kwargs):
+        entities = statement._raw_columns
+        if len(entities) != 1:
+            raise Exception("Only single‑entity SELECTs are supported")
 
         # Execute the query
-        entities = statement._raw_columns
         q = MemoryQuery(entities, self)
 
         # Apply WHERE
@@ -67,18 +105,15 @@ class MemorySession(Session):
         objs = q.all()
 
         for obj in objs:
-            self.store.mark_as_fetched(obj)
-
-        # Build minimal cursor metadata
-        metadata = SimpleResultMetaData([
-            (col.name, None, None, None, None, None, None)
-            for col in list(model.__table__.columns)
-        ])
+            self._mark_as_fetched(obj)
 
         # Wrap each object in a single‑element tuple, so .scalars() yields it
         wrapped = ((obj,) for obj in objs)
 
+        metadata = MemorySession._get_metadata_for_annotated_table(entities[0])
+
         return IteratorResult(metadata, wrapped)
+
 
     def _handle_delete(self, statement: Delete, **kwargs):
         q = MemoryQuery([statement.table], self)
@@ -89,7 +124,7 @@ class MemorySession(Session):
         collection = q.all()
 
         for obj in collection:
-            self.store.delete(obj)
+            self.delete(obj)
 
         result = IteratorResult(SimpleResultMetaData([]), iter([]))
         result.rowcount = len(collection)
@@ -115,7 +150,7 @@ class MemorySession(Session):
         instances = []
         for vals in vals_list:
             obj = model(**vals)
-            self.store.add(obj)
+            self.add(obj)
             instances.append(obj)
 
         rowcount = len(instances)
@@ -157,15 +192,13 @@ class MemorySession(Session):
                 pk_col_name = self.store._get_primary_key_name(obj)
 
             pk_value = getattr(obj, pk_col_name)
-            self.store.update(tablename, pk_value, data)
+            self.update(tablename, pk_value, data)
 
         result = IteratorResult(SimpleResultMetaData([]), iter([]))
         result.rowcount = len(collection)
         return result
 
     def execute(self, statement, params=None, **kwargs):
-        #logger.debug(f"Executing query: {statement}")
-
         if isinstance(statement, Select):
             return self._handle_select(statement, **kwargs)
 
@@ -190,7 +223,8 @@ class MemorySession(Session):
         existing = self.store.get_by_primary_key(instance, pk_value)
 
         if existing:
-            self.store.mark_as_fetched(existing)
+            self._mark_as_fetched(existing)
+            self._has_pending_merge = True
 
             for column in instance.__table__.columns:
                 field = column.name
@@ -205,16 +239,49 @@ class MemorySession(Session):
             self.add(instance)
             return instance
 
-    def delete(self, instance):
-        self.store.delete(instance)
+    @property
+    def dirty(self):
+        return bool(self._to_add or self._to_delete or self._to_update) or self._has_pending_merge
+
+    def _is_clean(self):
+        return not self.dirty
 
     def flush(self, objects=None):
-        pass
+        if not self._transaction or not self._transaction._connections:
+            self.connection()  # Ensure a real connection is created
+
+        to_transfer = [
+            "_to_add",
+            "_to_update",
+            "_to_delete",
+            "_fetched",
+        ]
+        for key in to_transfer:
+            item = getattr(self, key)
+            if not item:
+                continue
+            setattr(self.store, key, item.copy())
+            item.clear()
 
     def rollback(self, **kwargs):
         logger.debug("Rolling back ...")
+
+        self.store._fetched = self._fetched
         self.store.rollback()
 
+        self._has_pending_merge = False
+
+        self._to_add.clear()
+        self._to_delete.clear()
+        self._to_update.clear()
+        self._fetched.clear()
+
+
     def commit(self):
-        logger.debug("Committing ...")
-        self.store.commit()
+        if self.dirty:
+            self.flush()
+
+        if self.store.dirty or self._has_pending_merge:
+            logger.debug("Committing ...")
+            self.store.commit()
+            self._has_pending_merge = False

@@ -17,14 +17,13 @@ class TestAdvanced:
         ]
     )
     def test_like_patterns(self, SessionFactory, pattern, negate, expected_ids):
-        with SessionFactory() as session:
-            with session.begin():
-                session.add_all([
-                    Item(id=1, name="foo"),
-                    Item(id=2, name="bar"),
-                    Item(id=3, name="foobar"),
-                    Item(id=4, name="barfoo"),
-                ])
+        with SessionFactory.begin() as session:
+            session.add_all([
+                Item(id=1, name="foo"),
+                Item(id=2, name="bar"),
+                Item(id=3, name="foobar"),
+                Item(id=4, name="barfoo"),
+            ])
 
         with SessionFactory() as session:
             if negate:

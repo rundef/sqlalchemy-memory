@@ -31,8 +31,6 @@ FUNCTION_RESOLVERS = {
 class MemoryQuery(Query):
     def __init__(self, entities, element):
         super().__init__(entities, element)
-        assert len(entities) == 1, "Only single table queries are supported"
-
         self._model = entities[0]
 
         self._where_criteria = []
@@ -165,6 +163,10 @@ class MemoryQuery(Query):
         # Apply conditions
         for condition in self._where_criteria:
             collection = self._apply_condition(condition, collection)
+
+            if len(collection) == 0:
+                # No need to go further
+                return collection
 
         # Apply order by
         for clause in reversed(self._order_by or []):
