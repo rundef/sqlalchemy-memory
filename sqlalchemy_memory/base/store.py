@@ -4,6 +4,7 @@ from sqlalchemy.sql.elements import TextClause
 from datetime import datetime
 
 from ..logger import logger
+from .pending_changes import PendingChanges
 
 class InMemoryStore:
     def __init__(self):
@@ -13,23 +14,19 @@ class InMemoryStore:
         self.data = defaultdict(list)
         self.data_by_pk = defaultdict(dict)
 
-        # Non-committed inserts/deletes/updates
-        self._to_add = {}
-        self._to_delete = {}
-        self._to_update = {}
-
-        self._fetched = {}
+        # Non-committed changes
+        self.pending_changes = PendingChanges()
 
         # Auto increment counter per table
         self._pk_counter = defaultdict(int)
 
     @property
     def dirty(self):
-        return bool(self._to_add or self._to_delete or self._to_update)
+        return self.pending_changes.dirty
 
     def commit(self):
         # apply deletes
-        for tablename, objs in self._to_delete.items():
+        for tablename, objs in self.pending_changes._to_delete.items():
             if not objs:
                 continue
 
@@ -50,7 +47,7 @@ class InMemoryStore:
                 del self.data_by_pk[tablename][pk_value]
 
         # apply adds
-        for tablename, objs in self._to_add.items():
+        for tablename, objs in self.pending_changes._to_add.items():
             if tablename not in self.data:
                 self.data[tablename] = []
 
@@ -67,7 +64,7 @@ class InMemoryStore:
                 self.data_by_pk[tablename][pk_value] = obj
 
         # apply updates
-        for tablename, updates in self._to_update.items():
+        for tablename, updates in self.pending_changes._to_update.items():
             for pk_value, data in updates:
                 if pk_value not in self.data_by_pk[tablename].keys():
                     raise Exception(f"Could not find item with PK value {pk_value} in table '{tablename}'")
@@ -77,25 +74,18 @@ class InMemoryStore:
                 for k, v in data.items():
                     setattr(item, k, v)
 
-        self._to_add.clear()
-        self._to_delete.clear()
-        self._to_update.clear()
-        self._fetched.clear()
+        self.pending_changes.clear()
 
     def rollback(self):
-        self._to_add.clear()
-        self._to_delete.clear()
-        self._to_update.clear()
-
         # Revert attributes changes
-        for tablename, fetched_objs in self._fetched.items():
+        for tablename, fetched_objs in self.pending_changes._fetched.items():
             for pk_value, original_values in fetched_objs.items():
                 obj = self.data_by_pk[tablename].get(pk_value)
 
                 for field, value in original_values.items():
                     setattr(obj, field, value)
 
-        self._fetched.clear()
+        self.pending_changes.rollback()
 
     def get_by_primary_key(self, entity, pk_value):
         tablename = entity.__tablename__
