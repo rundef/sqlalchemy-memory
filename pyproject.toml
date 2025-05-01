@@ -7,6 +7,7 @@ name = "sqlalchemy-memory"
 version = "0.2.2"
 dependencies = [
     "sqlalchemy>=2.0,<3.0",
+    "sortedcontainers>=2.4.0"
 ]
 description = "In-memory SQLAlchemy 2.0 dialect for blazing‑fast prototyping."
 readme = "README.md"

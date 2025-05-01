@@ -29,14 +29,18 @@ FUNCTION_RESOLVERS = {
 }
 
 class MemoryQuery(Query):
-    def __init__(self, entities, element):
-        super().__init__(entities, element)
+    def __init__(self, entities, session):
+        super().__init__(entities, session)
         self._model = entities[0]
 
         self._where_criteria = []
         self._order_by = []
         self._limit = None
         self._offset = None
+
+    @property
+    def store(self):
+        return self.session.store
 
     @cached_property
     def tablename(self):
@@ -88,24 +92,26 @@ class MemoryQuery(Query):
 
         return list(result)
 
-    def _apply_binary_condition(self, cond: BinaryExpression, collection):
-        # Extract the Python value it's being compared to
-        rhs = cond.right
+    def _resolve_rhs(self, rhs):
         if isinstance(rhs, BindParameter):
-            value = rhs.value
+            return rhs.value
         elif isinstance(rhs, True_):
-            value = True
+            return True
         elif isinstance(rhs, False_):
-            value = False
+            return False
         elif isinstance(rhs, Null):
-            value = None
+            return None
         elif isinstance(rhs, ExpressionClauseList):
-            value = tuple(
+            return tuple(
                 clause.value if isinstance(clause, BindParameter) else clause
                 for clause in rhs.clauses
             )
         else:
             raise NotImplementedError(f"Unsupported RHS: {type(rhs)}")
+
+    def _apply_binary_condition(self, cond: BinaryExpression, collection):
+        # Extract the Python value it's being compared to
+        value = self._resolve_rhs(cond.right)
 
         col = cond.left
         accessor = lambda obj, attr_name: getattr(obj, attr_name)
@@ -131,6 +137,11 @@ class MemoryQuery(Query):
 
         op = cond.operator
 
+        # Use index if available
+        index_result = self.store.query_index(collection, table_name, attr_name, op, value)
+        if index_result is not None:
+            return index_result
+
         if op in OPERATOR_ADAPTERS:
             op = OPERATOR_ADAPTERS[op](value)
 
@@ -155,13 +166,15 @@ class MemoryQuery(Query):
         raise NotImplementedError(f"Unsupported condition type: {type(cond)}")
 
     def _execute_query(self):
-        collection = self.session.store.data.get(self.tablename, [])
+        collection = self.store.data.get(self.tablename, [])
         if not collection:
             logger.debug(f"Table '{self.tablename}' is empty")
             return collection
 
         # Apply conditions
-        for condition in self._where_criteria:
+        conditions = sorted(self._where_criteria, key=self._get_condition_selectivity)
+
+        for condition in conditions:
             collection = self._apply_condition(condition, collection)
 
             if len(collection) == 0:
@@ -192,3 +205,26 @@ class MemoryQuery(Query):
             collection = collection[:self._limit]
 
         return collection
+
+    def _get_condition_selectivity(self, cond):
+        total_count = self.store.count(self.tablename)
+
+        if not isinstance(cond, BinaryExpression):
+            return total_count
+
+        col = cond.left
+        if isinstance(col, FunctionElement):
+            return total_count
+
+        if not hasattr(col, "name"):
+            return total_count
+
+        value = self._resolve_rhs(cond.right)
+
+        return self.store.index_manager.get_selectivity(
+            tablename=self.tablename,
+            colname=col.name,
+            operator=cond.operator,
+            value=value,
+            total_count=total_count
+        )

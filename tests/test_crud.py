@@ -31,6 +31,7 @@ class TestCRUD:
                 assert items[2].id == 3
                 assert items[2].name == "fba"
 
+
     def test_update(self, SessionFactory):
         with SessionFactory() as session:
             with session.begin():

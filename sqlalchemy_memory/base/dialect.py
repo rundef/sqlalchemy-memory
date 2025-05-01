@@ -1,8 +1,19 @@
 from sqlalchemy.engine import URL, default
+from sqlalchemy import event
+from sqlalchemy.orm import Mapper
 import types
-
+import contextvars
 from .connection import MemoryDBAPIConnection
 from .store import InMemoryStore
+from ..logger import logger
+
+_current_store = contextvars.ContextVar("current_store")
+
+def set_current_store(store):
+    _current_store.set(store)
+
+def get_current_store():
+    return _current_store.get()
 
 class MemoryDialect(default.DefaultDialect):
     name = "memory"
@@ -16,6 +27,19 @@ class MemoryDialect(default.DefaultDialect):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._store = InMemoryStore()
+        set_current_store(self._store)
+
+        @event.listens_for(Mapper, "mapper_configured")
+        def auto_attach_tracking(_, class_):
+            logger.debug(f"Attaching tracking to class {class_}")
+
+            for column in class_.__table__.columns:
+                event.listen(
+                    getattr(class_, column.name),
+                    "set",
+                    lambda *a, **kw: get_current_store()._track_field_change_listener(*a, **kw),
+                    retval=False,
+                )
 
     def initialize(self, connection):
         super().initialize(connection)

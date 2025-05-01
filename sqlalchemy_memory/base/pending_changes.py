@@ -5,7 +5,9 @@ class PendingChanges:
         self._to_add = defaultdict(list)
         self._to_delete = defaultdict(list)
         self._to_update = defaultdict(list)
-        self._fetched = defaultdict(dict)
+
+        # Modifications done by the user, e.g.: instance.counter += 1
+        self._modifications = defaultdict(dict)
 
     def clear(self):
         self.rollback()
@@ -14,7 +16,7 @@ class PendingChanges:
         self._to_add.clear()
         self._to_delete.clear()
         self._to_update.clear()
-        self._fetched.clear()
+        self._modifications.clear()
 
     def add(self, obj, **kwargs):
         tablename = obj.__tablename__
@@ -28,29 +30,15 @@ class PendingChanges:
     def update(self, tablename, pk_value, data):
         self._to_update[tablename].append((pk_value, data))
 
-    def mark_as_fetched(self, obj, pk_value):
-        tablename = obj.__tablename__
-
-        if pk_value in self._fetched[tablename]:
-            # Don't mark as fetched again
-            return
-
-        original_values = {
-            col.name: getattr(obj, col.name)
-            for col in obj.__table__.columns
-        }
-        self._fetched[tablename][pk_value] = original_values
-
     @property
     def dirty(self):
-        return bool(self._to_add or self._to_delete or self._to_update)
+        return bool(self._to_add or self._to_delete or self._to_update or self._modifications)
 
     def flush_to(self, target):
         to_transfer = [
             "_to_add",
             "_to_update",
             "_to_delete",
-            "_fetched",
         ]
         for key in to_transfer:
             item = getattr(self, key)
@@ -58,3 +46,13 @@ class PendingChanges:
                 continue
             setattr(target, key, item.copy())
             item.clear()
+
+    def mark_field_as_dirty(self, instance, colname, oldvalue, value):
+        key = id(instance)
+        if key not in self._modifications:
+            self._modifications[key]["__instance"] = instance
+
+        if colname in self._modifications[key]:
+            self._modifications[key][colname][1] = value
+        else:
+            self._modifications[key][colname] = [oldvalue, value]

@@ -34,6 +34,7 @@ Data is kept purely in RAM and is **volatile**: it is **not persisted across app
 - **SQLAlchemy 2.0 support**: ORM & Core expressions, sync & async modes
 - **Zero I/O overhead**: pure in‑RAM storage (`dict`/`list` under the hood)
 - **Commit/rollback support**
+- **Index support** Declarative indexes are recognized and used for faster lookups
 - **Merge and `get()` support**: like real SQLAlchemy behavior
 
 ## Installation
@@ -154,6 +155,8 @@ Coming soon:
 - `func.count()` / aggregations
 
 - Joins and relationships (limited)
+
+- Compound indexes
 
 - Better expression support in `update(...).values()` (e.g., +=)
 

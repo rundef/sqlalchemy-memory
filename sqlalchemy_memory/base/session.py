@@ -9,7 +9,6 @@ from .query import MemoryQuery
 from .pending_changes import PendingChanges
 from ..logger import logger
 
-
 class MemorySession(Session):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -29,20 +28,11 @@ class MemorySession(Session):
     def update(self, tablename, pk_value, data):
         self.pending_changes.update(tablename, pk_value, data)
 
-    def _mark_as_fetched(self, obj):
-        pk_name = self.store._get_primary_key_name(obj)
-        pk_value = getattr(obj, pk_name)
-
-        self.pending_changes.mark_as_fetched(obj, pk_value)
-
     def get(self, entity, id, **kwargs):
         """
         Return an instance based on the given primary key identifier, or ``None`` if not found.
         """
-        instance = self.store.get_by_primary_key(entity, id)
-        if instance:
-            self._mark_as_fetched(instance)
-        return instance
+        return self.store.get_by_primary_key(entity, id)
 
     def scalars(self, statement, **kwargs):
         return self.execute(statement, **kwargs).scalars()
@@ -86,9 +76,6 @@ class MemorySession(Session):
             q = q.offset(statement._offset_clause.value)
 
         objs = q.all()
-
-        for obj in objs:
-            self._mark_as_fetched(obj)
 
         # Wrap each object in a single‑element tuple, so .scalars() yields it
         wrapped = ((obj,) for obj in objs)
@@ -206,7 +193,6 @@ class MemorySession(Session):
         existing = self.store.get_by_primary_key(instance, pk_value)
 
         if existing:
-            self._mark_as_fetched(existing)
             self._has_pending_merge = True
 
             for column in instance.__table__.columns:
@@ -238,7 +224,6 @@ class MemorySession(Session):
     def rollback(self, **kwargs):
         logger.debug("Rolling back ...")
 
-        self.store.pending_changes._fetched = self.pending_changes._fetched
         self.store.rollback()
 
         self._has_pending_merge = False

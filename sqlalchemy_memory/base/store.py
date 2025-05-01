@@ -1,10 +1,12 @@
 from collections import defaultdict
 from sqlalchemy import func
 from sqlalchemy.sql.elements import TextClause
+from sqlalchemy.orm.attributes import NEVER_SET, NO_VALUE, LoaderCallableStatus
 from datetime import datetime
 
 from ..logger import logger
 from .pending_changes import PendingChanges
+from .indexes import IndexManager
 
 class InMemoryStore:
     def __init__(self):
@@ -13,6 +15,8 @@ class InMemoryStore:
     def _reset(self):
         self.data = defaultdict(list)
         self.data_by_pk = defaultdict(dict)
+
+        self.index_manager = IndexManager()
 
         # Non-committed changes
         self.pending_changes = PendingChanges()
@@ -25,6 +29,8 @@ class InMemoryStore:
         return self.pending_changes.dirty
 
     def commit(self):
+        self.update_modified_items_indexes()
+
         # apply deletes
         for tablename, objs in self.pending_changes._to_delete.items():
             if not objs:
@@ -46,6 +52,10 @@ class InMemoryStore:
             for pk_value in pk_values:
                 del self.data_by_pk[tablename][pk_value]
 
+            # Update indexes
+            for obj in objs:
+                self.index_manager.on_delete(obj)
+
         # apply adds
         for tablename, objs in self.pending_changes._to_add.items():
             if tablename not in self.data:
@@ -62,6 +72,7 @@ class InMemoryStore:
 
                 self.data[tablename].append(obj)
                 self.data_by_pk[tablename][pk_value] = obj
+                self.index_manager.on_insert(obj)
 
         # apply updates
         for tablename, updates in self.pending_changes._to_update.items():
@@ -71,19 +82,23 @@ class InMemoryStore:
 
                 logger.debug(f"Updating table '{tablename}' where PK value={pk_value}: {data}")
                 item = self.data_by_pk[tablename][pk_value]
+
+                values = {}
                 for k, v in data.items():
+                    values[k] = dict(old=getattr(item, k), new=v)
                     setattr(item, k, v)
+
+                # Update indexes
+                self.index_manager.on_update(item, values)
 
         self.pending_changes.clear()
 
     def rollback(self):
         # Revert attributes changes
-        for tablename, fetched_objs in self.pending_changes._fetched.items():
-            for pk_value, original_values in fetched_objs.items():
-                obj = self.data_by_pk[tablename].get(pk_value)
-
-                for field, value in original_values.items():
-                    setattr(obj, field, value)
+        for updates in self.pending_changes._modifications.values():
+            instance = updates.pop("__instance")
+            for colname, (old_value, new_value) in updates.items():
+                setattr(instance, colname, old_value)
 
         self.pending_changes.rollback()
 
@@ -160,3 +175,36 @@ class InMemoryStore:
 
                 else:
                     raise Exception(f"Unhandled server_default type: {type(column.server_default)}")
+
+    def query_index(self, collection, table_name, attr_name, op, value):
+        result = self.index_manager.query(collection, table_name, attr_name, op, value)
+        if result is not None:
+            logger.debug(f"Reduced '{table_name}' dataset from {len(collection)} items to {len(result)} by using index on '{attr_name}")
+        return result
+
+    def count(self, tablename):
+        return len(self.data[tablename])
+
+    def update_modified_items_indexes(self):
+        # update indexes of modified objects
+        for updates in self.pending_changes._modifications.values():
+            instance = updates.pop("__instance")
+
+            values = {
+                colname: dict(old=old_value, new=new_value)
+                for colname, (old_value, new_value) in updates.items()
+                if old_value != new_value
+            }
+            if not values:
+                continue
+
+            # Update indexes
+            self.index_manager.on_update(instance, values)
+
+    def _track_field_change_listener(self, target, value, oldvalue, initiator):
+        if oldvalue in (NO_VALUE, NEVER_SET, LoaderCallableStatus.NO_VALUE):
+            return
+        if oldvalue == value:
+            return
+
+        self.pending_changes.mark_field_as_dirty(target, initiator.key, oldvalue, value)
