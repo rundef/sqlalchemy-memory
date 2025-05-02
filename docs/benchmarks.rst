@@ -1,5 +1,5 @@
-Benchmark Comparison (20,000 items)
-===================================
+Benchmark Comparison
+====================
 
 This benchmark compares `sqlalchemy-memory` to `in-memory SQLite` using 20,000 inserted items and a series of 500 queries, updates, and deletions.
 
