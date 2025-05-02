@@ -41,7 +41,7 @@ class MemoryDialect(default.DefaultDialect):
                     retval=False,
                 )
 
-    def _track_field_change_listener(*a, **kw):
+    def _track_field_change_listener(self, *a, **kw):
         try:
             store = get_current_store()
         except LookupError:
