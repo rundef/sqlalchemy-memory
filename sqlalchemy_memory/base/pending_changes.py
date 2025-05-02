@@ -20,8 +20,7 @@ class PendingChanges:
 
     def add(self, obj, **kwargs):
         tablename = obj.__tablename__
-        if not any(id(x) == id(obj) for x in self._to_add[tablename]):
-            self._to_add[tablename].append(obj)
+        self._to_add[tablename].append(obj)
 
     def delete(self, obj):
         tablename = obj.__tablename__

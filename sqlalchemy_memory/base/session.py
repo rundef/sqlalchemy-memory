@@ -22,6 +22,10 @@ class MemorySession(Session):
     def add(self, obj, **kwargs):
         self.pending_changes.add(obj, **kwargs)
 
+    def add_all(self, instances, **kwargs):
+        for instance in instances:
+            self.add(instance, **kwargs)
+
     def delete(self, obj):
         self.pending_changes.delete(obj)
 
@@ -159,7 +163,7 @@ class MemorySession(Session):
         pk_col_name = None
         for obj in collection:
             if pk_col_name is None:
-                pk_col_name = self.store._get_primary_key_name(obj)
+                pk_col_name = self.store._get_primary_key_name(obj.__table__)
 
             pk_value = getattr(obj, pk_col_name)
             self.update(tablename, pk_value, data)
@@ -188,7 +192,7 @@ class MemorySession(Session):
         Merge a possibly detached instance into the current session
         """
 
-        pk_name = self.store._get_primary_key_name(instance)
+        pk_name = self.store._get_primary_key_name(instance.__table__)
         pk_value = getattr(instance, pk_name)
         existing = self.store.get_by_primary_key(instance, pk_value)
 

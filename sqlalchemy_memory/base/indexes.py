@@ -3,8 +3,12 @@ from sortedcontainers import SortedDict
 from typing import Any, List
 from sqlalchemy.sql import operators
 
+from ..helpers.ordered_set import OrderedSet
+
 
 class IndexManager:
+    __slots__ = ('hash_index', 'range_index', 'table_indexes', 'columns_mapping', )
+
     def __init__(self):
         self.hash_index = HashIndex()
         self.range_index = RangeIndex()
@@ -12,6 +16,7 @@ class IndexManager:
         self.table_indexes = {}
         self.columns_mapping = {}
 
+    
     def get_indexes(self, obj):
         """
         Retrieve index from object's table as dict: indexname => list of column name
@@ -21,17 +26,26 @@ class IndexManager:
         if tablename not in self.table_indexes:
             self.table_indexes[tablename] = {}
 
+            pk_col_name = obj.__table__.primary_key.columns[0].name
+
             for index in obj.__table__.indexes:
                 if len(index.expressions) > 1:
                     # Ignoring compound indexes for now ...
                     continue
+
+                if index.name == pk_col_name:
+                    pk_col_name = None
 
                 self.table_indexes[tablename][index.name] = [
                     col.name
                     for col in index.expressions
                 ]
 
+            if pk_col_name:
+                self.table_indexes[tablename][pk_col_name] = [pk_col_name]
+
         return self.table_indexes[tablename]
+
 
     def _column_to_index(self, tablename, colname):
         """
@@ -51,6 +65,7 @@ class IndexManager:
 
         return self.columns_mapping[tablename][colname]
 
+    
     def _get_index_key(self, obj, columns):
         if len(columns) == 1:
             return getattr(obj, columns[0])
@@ -65,7 +80,7 @@ class IndexManager:
 
             self.hash_index.add(tablename, indexname, value, obj)
             self.range_index.add(tablename, indexname, value, obj)
-
+    
     def on_delete(self, obj):
         tablename = obj.__tablename__
         indexes = self.get_indexes(obj)
@@ -145,6 +160,7 @@ class IndexManager:
             in_range = self.range_index.query(tablename, indexname, gte=value[0], lte=value[1])
             return list(set(collection) - set(in_range))
 
+    
     def get_selectivity(self, tablename, colname, operator, value, total_count):
         """
         Estimate selectivity: higher means worst filtering.
@@ -187,23 +203,24 @@ class HashIndex:
     Maintains insertion order of objects.
     """
 
+    __slots__ = ('index',)
+
     def __init__(self):
-        self.index = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+        self.index = defaultdict(lambda: defaultdict(lambda: defaultdict(OrderedSet)))
+
 
     def add(self, tablename: str, indexname: str, value: Any, obj: Any):
-        self.index[tablename][indexname][value].append(obj)
+        self.index[tablename][indexname][value].add(obj)
+
 
     def remove(self, tablename: str, indexname: str, value: Any, obj: Any):
-        lst = self.index[tablename][indexname][value]
-        try:
-            lst.remove(obj)
-            if not lst:
-                del self.index[tablename][indexname][value]
-        except ValueError:
-            pass
+        s = self.index[tablename][indexname][value]
+        s.discard(obj)
+        if not s:
+            del self.index[tablename][indexname][value]
 
     def query(self, tablename: str, indexname: str, value: Any) -> List[Any]:
-        return self.index[tablename][indexname].get(value, [])
+        return list(self.index[tablename][indexname].get(value, []))
 
 
 class RangeIndex:
@@ -215,12 +232,19 @@ class RangeIndex:
         index[tablename][indexname] = SortedDict { value: [obj1, obj2, ...] }
     """
 
+    __slots__ = ('index',)
+
     def __init__(self):
         self.index = defaultdict(lambda: defaultdict(SortedDict))
 
     def add(self, tablename: str, indexname: str, value: Any, obj: Any):
-        self.index[tablename][indexname].setdefault(value, []).append(obj)
+        index = self.index[tablename][indexname]
+        if value in index:
+            index[value].append(obj)
+        else:
+            index[value] = [obj]
 
+    
     def remove(self, tablename: str, indexname: str, value: Any, obj: Any):
         col = self.index[tablename][indexname]
         if value in col:
