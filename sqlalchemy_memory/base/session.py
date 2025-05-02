@@ -4,11 +4,10 @@ from sqlalchemy.sql.dml import Insert, Delete, Update
 from sqlalchemy.engine import IteratorResult
 from sqlalchemy.engine.cursor import SimpleResultMetaData
 from functools import lru_cache
-from collections import defaultdict
 
 from .query import MemoryQuery
+from .pending_changes import PendingChanges
 from ..logger import logger
-
 
 class MemorySession(Session):
     def __init__(self, *args, **kwargs):
@@ -17,49 +16,23 @@ class MemorySession(Session):
         self._has_pending_merge = False
         self.store = self.get_bind().dialect._store
 
-        # Non-committed inserts/deletes/updates
-        self._to_add = defaultdict(list)
-        self._to_delete = defaultdict(list)
-        self._to_update = defaultdict(list)
-
-        self._fetched = defaultdict(dict)
+        # Non-flushed changes
+        self.pending_changes = PendingChanges()
 
     def add(self, obj, **kwargs):
-        tablename = obj.__tablename__
-        if not any(id(x) == id(obj) for x in self._to_add[tablename]):
-            self._to_add[tablename].append(obj)
+        self.pending_changes.add(obj, **kwargs)
 
     def delete(self, obj):
-        tablename = obj.__tablename__
-        self._to_delete[tablename].append(obj)
+        self.pending_changes.delete(obj)
 
     def update(self, tablename, pk_value, data):
-        self._to_update[tablename].append((pk_value, data))
-
-    def _mark_as_fetched(self, instance):
-        tablename = instance.__tablename__
-
-        pk_name = self.store._get_primary_key_name(instance)
-        pk_value = getattr(instance, pk_name)
-
-        if pk_value in self._fetched[tablename]:
-            # Don't mark as fetched again
-            return
-
-        original_values = {
-            col.name: getattr(instance, col.name)
-            for col in instance.__table__.columns
-        }
-        self._fetched[tablename][pk_value] = original_values
+        self.pending_changes.update(tablename, pk_value, data)
 
     def get(self, entity, id, **kwargs):
         """
         Return an instance based on the given primary key identifier, or ``None`` if not found.
         """
-        instance = self.store.get_by_primary_key(entity, id)
-        if instance:
-            self._mark_as_fetched(instance)
-        return instance
+        return self.store.get_by_primary_key(entity, id)
 
     def scalars(self, statement, **kwargs):
         return self.execute(statement, **kwargs).scalars()
@@ -103,9 +76,6 @@ class MemorySession(Session):
             q = q.offset(statement._offset_clause.value)
 
         objs = q.all()
-
-        for obj in objs:
-            self._mark_as_fetched(obj)
 
         # Wrap each object in a single‑element tuple, so .scalars() yields it
         wrapped = ((obj,) for obj in objs)
@@ -223,7 +193,6 @@ class MemorySession(Session):
         existing = self.store.get_by_primary_key(instance, pk_value)
 
         if existing:
-            self._mark_as_fetched(existing)
             self._has_pending_merge = True
 
             for column in instance.__table__.columns:
@@ -241,7 +210,7 @@ class MemorySession(Session):
 
     @property
     def dirty(self):
-        return bool(self._to_add or self._to_delete or self._to_update) or self._has_pending_merge
+        return self.pending_changes.dirty or self._has_pending_merge
 
     def _is_clean(self):
         return not self.dirty
@@ -250,31 +219,15 @@ class MemorySession(Session):
         if not self._transaction or not self._transaction._connections:
             self.connection()  # Ensure a real connection is created
 
-        to_transfer = [
-            "_to_add",
-            "_to_update",
-            "_to_delete",
-            "_fetched",
-        ]
-        for key in to_transfer:
-            item = getattr(self, key)
-            if not item:
-                continue
-            setattr(self.store, key, item.copy())
-            item.clear()
+        self.pending_changes.flush_to(self.store.pending_changes)
 
     def rollback(self, **kwargs):
         logger.debug("Rolling back ...")
 
-        self.store._fetched = self._fetched
         self.store.rollback()
 
         self._has_pending_merge = False
-
-        self._to_add.clear()
-        self._to_delete.clear()
-        self._to_update.clear()
-        self._fetched.clear()
+        self.pending_changes.rollback()
 
 
     def commit(self):

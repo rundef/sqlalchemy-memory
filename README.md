@@ -2,6 +2,7 @@
 
 [![PyPI - Version](https://img.shields.io/pypi/v/sqlalchemy-memory)](https://pypi.org/project/sqlalchemy-memory/)
 [![CI](https://github.com/rundef/sqlalchemy-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/rundef/sqlalchemy-memory/actions/workflows/ci.yml)
+[![Documentation](https://app.readthedocs.org/projects/sqlalchemy-memory/badge/?version=latest)](https://sqlalchemy-memory.readthedocs.io/en/latest/)
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/sqlalchemy-memory)](https://pypistats.org/packages/sqlalchemy-memory)
 
 
@@ -34,6 +35,7 @@ Data is kept purely in RAM and is **volatile**: it is **not persisted across app
 - **SQLAlchemy 2.0 support**: ORM & Core expressions, sync & async modes
 - **Zero I/O overhead**: pure in‑RAM storage (`dict`/`list` under the hood)
 - **Commit/rollback support**
+- **Index support**: indexes are recognized and used for faster lookups
 - **Merge and `get()` support**: like real SQLAlchemy behavior
 
 ## Installation
@@ -42,104 +44,10 @@ Data is kept purely in RAM and is **volatile**: it is **not persisted across app
 pip install sqlalchemy-memory
 ```
 
-## Quickstart
+## Documentation
 
-```python
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import sessionmaker, declarative_base, Mapped, mapped_column
-from sqlalchemy_memory import MemorySession
+[See the official documentation for usage examples](https://sqlalchemy-memory.readthedocs.io/en/latest/)
 
-engine = create_engine("memory://")
-Session = sessionmaker(
-    engine,
-    class_=MemorySession,
-    expire_on_commit=False,
-)
-
-Base = declarative_base()
-
-class Item(Base):
-    __tablename__ = "items"
-    id:   Mapped[int]    = mapped_column(primary_key=True)
-    name: Mapped[str]    = mapped_column()
-    def __repr__(self):
-        return f"Item(id={self.id} name={self.name})"
-
-Base.metadata.create_all(engine)
-
-# Use just like any other SQLAlchemy engine:
-session = Session()
-
-# Add & commit
-item = Item(id=1, name="foo")
-session.add(item)
-session.commit()
-
-# Query (no SQL under the hood: objects come straight back)
-items = session.scalars(select(Item)).all()
-print("Items", items)
-assert items[0] is item
-assert items[0].name == "foo"
-
-# Delete & commit
-session.delete(item)
-session.commit()
-
-# Confirm gone
-assert session.scalars(select(Item)).all() == []
-```
-
-## Quickstart (async)
-
-```python
-import asyncio
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy.orm import sessionmaker, declarative_base, Mapped, mapped_column
-from sqlalchemy_memory import MemorySession, AsyncMemorySession
-
-engine = create_async_engine("memory+asyncio://")
-Session = sessionmaker(
-    engine,
-    class_=AsyncMemorySession,
-    sync_session_class=MemorySession,
-    expire_on_commit=False,
-)
-
-Base = declarative_base()
-
-class Item(Base):
-    __tablename__ = "items"
-    id:   Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column()
-
-    def __repr__(self):
-        return f"Item(id={self.id} name={self.name})"
-
-Base.metadata.create_all(engine.sync_engine)
-
-async def main():
-    async with Session() as session:
-        # Add & commit
-        item = Item(id=1, name="foo")
-        session.add(item)
-        await session.commit()
-
-        # Query (no SQL under the hood: objects come straight back)
-        items = (await session.scalars(select(Item))).all()
-        print("Items", items)
-        assert items[0] is item
-        assert items[0].name == "foo"
-
-        # Delete & commit
-        await session.delete(item)
-        await session.commit()
-
-        # Confirm gone
-        assert (await session.scalars(select(Item))).all() == []
-
-asyncio.run(main())
-```
 
 ## Status
 
@@ -155,11 +63,13 @@ Coming soon:
 
 - Joins and relationships (limited)
 
+- Compound indexes
+
 - Better expression support in `update(...).values()` (e.g., +=)
 
 ## Testing
 
-Simply run `pytest`
+Simply run `make tests`
 
 ## License
 

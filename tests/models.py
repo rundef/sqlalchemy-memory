@@ -16,9 +16,9 @@ class Item(Base):
 class Product(Base):
     __tablename__ = "products"
     id: Mapped[int] = mapped_column(primary_key=True)
-    active: Mapped[bool] = mapped_column(default=True, index=True)
+    active: Mapped[bool] = mapped_column(default=True)
     name: Mapped[str] = mapped_column(nullable=False)
-    category: Mapped[str] = mapped_column(index=True, server_default=text("unknown"))
+    category: Mapped[str] = mapped_column(server_default=text("unknown"))
     data: Mapped[dict] = mapped_column(JSON)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -28,3 +28,14 @@ class Product(Base):
 
     def __repr__(self):
         return f"Product(id={self.id} name={self.name})"
+
+class ProductWithIndex(Base):
+    __tablename__ = "products_with_index"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    active: Mapped[bool] = mapped_column(default=True, index=True)
+    name: Mapped[str] = mapped_column(nullable=False)
+    category: Mapped[str] = mapped_column(index=True, nullable=False)
+    price: Mapped[float] = mapped_column(default=True, index=True)
+
+    def __repr__(self):
+        return f"ProductWithIndex(id={self.id} name={self.name})"
