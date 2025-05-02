@@ -24,6 +24,10 @@ class InMemoryStore:
         # Auto increment counter per table
         self._pk_counter = defaultdict(int)
 
+        # Caches
+        self.table_columns = {}
+        self.table_pk_name = {}
+
     @property
     def dirty(self):
         return self.pending_changes.dirty
@@ -37,7 +41,7 @@ class InMemoryStore:
                 continue
 
             data = self.data.get(tablename, [])
-            pk_col_name = self._get_primary_key_name(objs[0])
+            pk_col_name = self._get_primary_key_name(objs[0].__table__)
 
             pk_values = set(getattr(obj, pk_col_name) for obj in objs)
             logger.debug(f"Deleting rows from table '{tablename}' with PK values={pk_values}")
@@ -57,11 +61,16 @@ class InMemoryStore:
                 self.index_manager.on_delete(obj)
 
         # apply adds
+        added = set()
         for tablename, objs in self.pending_changes._to_add.items():
             if tablename not in self.data:
                 self.data[tablename] = []
 
             for obj in objs:
+                if id(obj) in added:
+                    continue
+                added.add(id(obj))
+
                 pk_value = self._assign_primary_key_if_needed(obj)
                 if pk_value in self.data_by_pk[tablename].keys():
                     raise Exception(f"Cannot have duplicate PK value {pk_value} for table '{tablename}'")
@@ -109,17 +118,31 @@ class InMemoryStore:
 
         return self.data_by_pk[tablename].get(pk_value)
 
-    def _get_primary_key_name(self, obj):
+    def _get_primary_key_name(self, table):
         """
         Return the PK column name
         """
-        pk_cols = obj.__table__.primary_key.columns
+        tablename = table.name
+        if tablename not in self.table_pk_name:
+            pk_cols = table.primary_key.columns
 
-        if len(pk_cols) != 1:
-            raise NotImplementedError("Only single-column primary keys are supported.")
+            if len(pk_cols) != 1:
+                raise NotImplementedError("Only single-column primary keys are supported.")
 
-        col = list(pk_cols)[0]
-        return col.name
+            col = list(pk_cols)[0]
+            self.table_pk_name[tablename] = col.name
+
+        return self.table_pk_name[tablename]
+
+    def _get_table_columns(self, table):
+        """
+        Returns the table columns
+        """
+        tablename = table.name
+        if tablename not in self.table_columns:
+            self.table_columns[tablename] = table.columns
+
+        return self.table_columns[tablename]
 
     def _assign_primary_key_if_needed(self, obj):
         """
@@ -127,18 +150,18 @@ class InMemoryStore:
         If user specifies an ID, use it and update the counter if necessary.
         If no ID is specified, assign the next available one.
         """
-        pk_col_name = self._get_primary_key_name(obj)
-        table = obj.__tablename__
-        current_id = getattr(obj, pk_col_name, None)
+        pk_col_name = self._get_primary_key_name(obj.__table__)
+        current_id = obj.__dict__.get(pk_col_name, None)
+        tablename = obj.__tablename__
 
         if current_id is None:
             # Auto-assign next ID
-            self._pk_counter[table] += 1
-            current_id = self._pk_counter[table]
-            setattr(obj, pk_col_name, current_id)
+            current_id = self._pk_counter[tablename] = self._pk_counter[tablename] + 1
+            obj.__dict__[pk_col_name] = current_id
+
         else:
             # Ensure auto-increment counter stays ahead
-            self._pk_counter[table] = max(self._pk_counter[table], current_id)
+            self._pk_counter[tablename] = max(self._pk_counter[tablename], current_id)
 
         return current_id
 
@@ -147,7 +170,10 @@ class InMemoryStore:
         Apply default and server_default values to an ORM object.
         """
 
-        for column in obj.__table__.columns:
+        for column in self._get_table_columns(obj.__table__):
+            if column.default is None and column.server_default is None:
+                continue
+
             attr_name = column.name
             current_value = getattr(obj, attr_name, None)
 
@@ -163,15 +189,15 @@ class InMemoryStore:
                 else:
                     value = column.default.arg
 
-                setattr(obj, attr_name, value)
+                obj.__dict__[attr_name] = value
 
             elif column.server_default is not None:
                 if isinstance(column.server_default.arg, TextClause):
                     text_value = column.server_default.arg.text
-                    setattr(obj, attr_name, text_value)
+                    obj.__dict__[attr_name] = text_value
 
                 elif isinstance(column.server_default.arg, func.now().__class__):
-                    setattr(obj, attr_name, datetime.utcnow())
+                    obj.__dict__[attr_name] = datetime.utcnow()
 
                 else:
                     raise Exception(f"Unhandled server_default type: {type(column.server_default)}")

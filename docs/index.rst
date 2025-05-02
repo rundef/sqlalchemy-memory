@@ -113,3 +113,4 @@ Quickstart: async example
    update
    delete
    commit_rollback
+   benchmarks
