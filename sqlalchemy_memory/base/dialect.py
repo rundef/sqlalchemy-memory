@@ -37,9 +37,17 @@ class MemoryDialect(default.DefaultDialect):
                 event.listen(
                     getattr(class_, column.name),
                     "set",
-                    lambda *a, **kw: get_current_store()._track_field_change_listener(*a, **kw),
+                    self._track_field_change_listener,
                     retval=False,
                 )
+
+    def _track_field_change_listener(*a, **kw):
+        try:
+            store = get_current_store()
+        except LookupError:
+            return
+
+        store._track_field_change_listener(*a, **kw)
 
     def initialize(self, connection):
         super().initialize(connection)
