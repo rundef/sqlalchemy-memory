@@ -1,8 +1,9 @@
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, not_, case
+from sqlalchemy.orm import joinedload, selectinload
 from datetime import datetime, date
 import pytest
 
-from models import Item, Product
+from models import Item, Product, ProductWithIndex, Vendor
 
 class TestAdvanced:
     @pytest.mark.parametrize(
@@ -195,7 +196,40 @@ class TestAdvanced:
             results = session.execute(stmt).scalars().all()
             assert {item.id for item in results} == expected_ids
 
-    def test_and_or(self, SessionFactory):
+    @pytest.mark.parametrize("condition,expected_ids", [
+        (
+            (Product.id > 1) & ((Product.id < 4) | (Product.category == "A")),
+            {2, 3, 5},
+        ),
+        (
+            and_(
+                Product.id > 1,
+                or_(
+                    Product.id < 4,
+                    Product.category == "A"
+                )
+            ),
+            {2, 3, 5},
+        ),
+        (
+            not_(Product.category == "A"),
+            {2, 3, 4}
+        ),
+        (
+            or_(
+                and_(
+                    not_(Product.category == "A"), # 2,3,4
+                    Product.id > 2 # 3,4
+                ),
+                and_(
+                    Product.category == "A", # 1,5
+                    not_(Product.id == 1)  # 2,3,4,5
+                ),
+            ),
+            {3, 4, 5},
+        ),
+    ])
+    def test_and_or_not(self, SessionFactory, condition, expected_ids):
         with SessionFactory() as session:
             session.add_all([
                 Product(id=1, name="foo", category="A"),
@@ -208,29 +242,10 @@ class TestAdvanced:
 
             stmt = (
                 select(Product)
-                .where(
-                    (Product.id > 1) & (
-                        (Product.id < 4) | (Product.category == "A")
-                    )
-                )
+                .where(condition)
             )
             results = session.execute(stmt).scalars().all()
-            assert {item.id for item in results} == {2, 3, 5}
-
-            stmt = (
-                select(Product)
-                .where(
-                    and_(
-                        Product.id > 1,
-                        or_(
-                            Product.id < 4,
-                            Product.category == "A"
-                        )
-                    )
-                )
-            )
-            results = session.execute(stmt).scalars().all()
-            assert {item.id for item in results} == {2, 3, 5}
+            assert {item.id for item in results} == expected_ids
 
     def test_session_inception(self, SessionFactory):
         with SessionFactory() as session1:
@@ -240,3 +255,110 @@ class TestAdvanced:
             with SessionFactory() as session2:
                 results = session2.execute(select(Item)).scalars().all()
                 assert len(results) == 1
+
+    @pytest.mark.parametrize("query", [
+        select(ProductWithIndex),
+        select(ProductWithIndex.id, ProductWithIndex.name),
+
+        # Join shouldn't affect anything
+        lambda: select(ProductWithIndex).options(joinedload(ProductWithIndex.vendor)),
+        lambda: select(ProductWithIndex).options(selectinload(ProductWithIndex.vendor)),
+        lambda: select(
+            ProductWithIndex.id,
+            ProductWithIndex.name,
+        ).join(ProductWithIndex.vendor)
+    ])
+    def test_select_subset_of_columns(self, SessionFactory, query):
+        with SessionFactory() as session:
+            vendor1 = Vendor(id=10, name="First vendor")
+            vendor2 = Vendor(id=20, name="Second vendor")
+
+            session.add_all([
+                vendor1,
+                vendor2,
+            ])
+
+            session.add_all([
+                ProductWithIndex(id=1, name="foo", category="A", vendor_id=10, vendor=vendor1),
+                ProductWithIndex(id=2, name="bar", category="B", vendor_id=10, vendor=vendor1),
+                ProductWithIndex(id=3, name="foobar", category="B", vendor_id=20, vendor=vendor2),
+            ])
+            session.commit()
+
+            if callable(query):
+                query = query()
+
+            results = session.execute(query).scalars().all()
+
+            assert len(results) == 3
+
+            # We get the objects straight back, no column selection
+            assert {
+                r.id: (r.name, r.category)
+                for r in results
+            } == {
+                1: ("foo", "A"),
+                2: ("bar", "B"),
+                3: ("foobar", "B"),
+            }
+
+    @pytest.mark.parametrize("query, expected", [
+        (
+            # Labels
+            select(
+                ProductWithIndex.id.label("product_id"),
+                ProductWithIndex.name.label("product_name"),
+                Vendor.name.label("vendor_name"),
+            ),
+            [
+                {"product_id": 1, "product_name": "foo", "vendor_name": "First vendor"},
+                {"product_id": 2, "product_name": "bar", "vendor_name": "First vendor"},
+                {"product_id": 3, "product_name": "foobar", "vendor_name": "Second vendor"},
+            ]
+        ),
+
+        (
+            # Simple case()
+            select(
+                ProductWithIndex.id,
+                case(
+                    (
+                       ProductWithIndex.id >= 3, "High"
+                    ),
+                    (
+                        ProductWithIndex.id < 2, "Low"
+                    ),
+                    else_="Medium"
+                ).label("test"),
+            ),
+            [
+                {"id": 1, "test": "Low"},
+                {"id": 2, "test": "Medium"},
+                {"id": 3, "test": "High"},
+            ]
+        ),
+    ])
+    def test_select_expressions(self, SessionFactory, query, expected):
+        with SessionFactory() as session:
+            vendor1 = Vendor(id=10, name="First vendor")
+            vendor2 = Vendor(id=20, name="Second vendor")
+
+            session.add_all([
+                vendor1,
+                vendor2,
+            ])
+
+            session.add_all([
+                ProductWithIndex(id=1, name="foo", category="A", vendor_id=10, vendor=vendor1),
+                ProductWithIndex(id=2, name="bar", category="B", vendor_id=10, vendor=vendor1),
+                ProductWithIndex(id=3, name="foobar", category="B", vendor_id=20, vendor=vendor2),
+            ])
+            session.commit()
+
+            results = session.execute(query).scalars().all()
+
+            assert len(results) == len(expected)
+            for idx, (result, expected_result) in enumerate(zip(results, expected)):
+                for k, v in expected_result.items():
+                    assert hasattr(result, k), f"Expected {k} to be in result, but keys are {result.__dict__.keys()}"
+                    assert getattr(result, k) == v, f"Expected {k} to be == {v} for item #{idx}"
