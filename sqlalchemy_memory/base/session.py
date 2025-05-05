@@ -1,9 +1,11 @@
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.selectable import Select
+from sqlalchemy.sql.selectable import Select, SelectLabelStyle
 from sqlalchemy.sql.dml import Insert, Delete, Update
 from sqlalchemy.engine import IteratorResult
 from sqlalchemy.engine.cursor import SimpleResultMetaData
 from functools import lru_cache
+
+from unittest.mock import MagicMock
 
 from .query import MemoryQuery
 from .pending_changes import PendingChanges
@@ -12,7 +14,6 @@ from ..logger import logger
 class MemorySession(Session):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._query_cls = MemoryQuery
         self._has_pending_merge = False
         self.store = self.get_bind().dialect._store
 
@@ -46,56 +47,46 @@ class MemorySession(Session):
 
     @staticmethod
     @lru_cache(maxsize=256)
-    def _get_metadata_for_annotated_table(annotated_table):
+    def _get_metadata_for_table(table):
         """
         Build minimal cursor metadata
         """
-        col_names = [col.name for col in annotated_table._columns]
+        col_names = [col.name for col in table._columns]
         return SimpleResultMetaData([
             (col_name, None, None, None, None, None, None)
             for col_name in col_names
         ])
 
+    @staticmethod
+    def _get_metadata_from_columns(columns):
+        return SimpleResultMetaData([
+            (getattr(col, "name", str(col)), None, None, None, None, None, None)
+            for col in columns
+        ])
 
     def _handle_select(self, statement: Select, **kwargs):
-        entities = statement._raw_columns
-        if len(entities) != 1:
-            raise Exception("Only single‑entity SELECTs are supported")
-
         # Execute the query
-        q = MemoryQuery(entities, self)
+        q = MemoryQuery(statement, self)
+        results = q.iter_items()
 
-        # Apply WHERE
-        for cond in statement._where_criteria:
-            q = q.filter(cond)
+        metadata = self._get_metadata_from_columns(statement._raw_columns)
 
-        # Apply ORDER BY
-        for clause in statement._order_by_clauses:
-            q = q.order_by(clause)
-
-        # Apply LIMIT / OFFSET
-        if statement._limit_clause is not None:
-            q = q.limit(statement._limit_clause.value)
-        if statement._offset_clause is not None:
-            q = q.offset(statement._offset_clause.value)
-
-        objs = q.all()
+        if statement._label_style is SelectLabelStyle.LABEL_STYLE_LEGACY_ORM:
+            """
+            Support for legacy session.query(...) style
+            """
+            it = IteratorResult(metadata, results)
+            it._real_result = MagicMock(_source_supports_scalars=True)
+            it._generate_rows = False
+            return it
 
         # Wrap each object in a single‑element tuple, so .scalars() yields it
-        wrapped = ((obj,) for obj in objs)
-
-        metadata = MemorySession._get_metadata_for_annotated_table(entities[0])
-
-        return IteratorResult(metadata, wrapped)
+        results = ((r,) for r in results)
+        return IteratorResult(metadata, results)
 
 
     def _handle_delete(self, statement: Delete, **kwargs):
-        q = MemoryQuery([statement.table], self)
-
-        for cond in statement._where_criteria:
-            q = q.filter(cond)
-
-        collection = q.all()
+        collection = MemoryQuery(statement, self).all()
 
         for obj in collection:
             self.delete(obj)
@@ -147,12 +138,7 @@ class MemorySession(Session):
         return result
 
     def _handle_update(self, statement: Update, **kwargs):
-        q = MemoryQuery([statement.table], self)
-
-        for cond in statement._where_criteria:
-            q = q.filter(cond)
-
-        collection = q.all()
+        collection = MemoryQuery(statement, self).all()
 
         data = {
             col.name: bindparam.value

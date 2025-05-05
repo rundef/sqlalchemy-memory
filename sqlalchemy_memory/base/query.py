@@ -1,15 +1,23 @@
 from sqlalchemy.sql.elements import (
     UnaryExpression, BinaryExpression, BindParameter, ExpressionClauseList, BooleanClauseList,
-    Grouping, True_, False_, Null
+    Grouping, True_, False_, Null,
+    Label,
 )
 from sqlalchemy.sql.functions import FunctionElement
 from sqlalchemy.sql import operators
-from sqlalchemy.sql.annotation import AnnotatedTable
+from sqlalchemy.sql.annotation import AnnotatedTable, AnnotatedColumn
+from sqlalchemy.sql.schema import Table
+from sqlalchemy.sql.functions import Function
+from sqlalchemy.sql.selectable import Select, Join
+from sqlalchemy.sql.dml import Delete, Update
 from sqlalchemy.orm.query import Query
+from sqlalchemy.orm.decl_api import DeclarativeMeta
 from functools import cached_property
+from itertools import tee, islice
 import fnmatch
 
 from ..logger import logger
+from ..helpers.utils import _dedup_chain
 from .resolvers import DateResolver, JsonExtractResolver
 
 OPERATOR_ADAPTERS = {
@@ -29,68 +37,117 @@ FUNCTION_RESOLVERS = {
 }
 
 class MemoryQuery(Query):
-    def __init__(self, entities, session):
-        super().__init__(entities, session)
-        self._model = entities[0]
-
-        self._where_criteria = []
-        self._order_by = []
-        self._limit = None
-        self._offset = None
+    def __init__(self, statement, session):
+        self.session = session
+        self._statement = statement
 
     @property
     def store(self):
         return self.session.store
 
+    @property
+    def table(self):
+        if isinstance(self._statement, (Update, Delete)):
+            return self._statement.table
+
+        if len(self._statement._from_obj) == 1:
+            return self._statement._from_obj[0]
+
+        # Attempt to extract table from raw columns (quicker)
+        table = self._extract_table_from_raw_columns()
+        if table is not None:
+            return table
+
+        from_clauses = self._statement.get_final_froms()
+        if len(from_clauses) != 1:
+            raise Exception(f"Only select statement with a single FROM clause are supported")
+
+        from_clause = from_clauses[0]
+
+        if isinstance(from_clause, Table):
+            return from_clause
+
+        if isinstance(from_clause, Join):
+            return from_clause.left
+
+        raise Exception(f"Unhandled SELECT FROM clause type: {type(from_clause)}")
+
     @cached_property
     def tablename(self):
-        if isinstance(self._model, AnnotatedTable):
-            return self._model.name
-        return self._model.__tablename__
+        return self.table.name
+
+    @cached_property
+    def is_select(self):
+        return isinstance(self._statement, Select)
+
+    @cached_property
+    def _limit(self):
+        if self.is_select and self._statement._limit_clause is not None:
+            return self._statement._limit_clause.value
+
+    @cached_property
+    def _offset(self):
+        if self.is_select and self._statement._offset_clause is not None:
+            return self._statement._offset_clause.value
+
+    @cached_property
+    def _order_by(self):
+        if self.is_select:
+            return self._statement._order_by_clauses
+        return []
+
+    @cached_property
+    def _where_criteria(self):
+        return self._statement._where_criteria
+
+    def iter_items(self):
+        return self._execute_query()
 
     def first(self):
-        items = self._execute_query()
-        return items[0] if items else None
+        gen = self.iter_items()
+        try:
+            return next(gen)
+        except StopIteration:
+            return None
 
     def all(self):
-        items = self._execute_query()
-        return items
+        gen = self.iter_items()
+        gen = self._project(gen)
+        #print(items)
+        return list(gen)
 
     def filter(self, condition):
-        self._where_criteria.append(condition)
+        self._statement._where_criteria.append(condition)
         return self
 
-    def limit(self, value):
-        self._limit = value
-        return self
-
-    def offset(self, value):
-        self._offset = value
-        return self
-
-    def order_by(self, clause):
-        self._order_by.append(clause)
-        return self
-
-    def _apply_boolean_condition(self, cond: BooleanClauseList, collection):
+    def _apply_boolean_condition(self, cond: BooleanClauseList, stream):
         op = cond.operator  # and_ or or_
 
-        # Recursively evaluate each sub-condition
-        subresults = [
-            set(self._apply_condition(subcond, collection))
-            for subcond in cond.clauses
-        ]
+        if op is operators.and_:
+            # Apply filters sequentially to the current stream
+            for subcond in cond.clauses:
+                stream = self._apply_condition(subcond, stream)
+            return stream
+
+        op = cond.operator
 
         if op is operators.and_:
-            # Intersection: item must satisfy all sub-conditions
-            result = set.intersection(*subresults)
-        elif op is operators.or_:
-            # Union: item can satisfy any sub-condition
-            result = set.union(*subresults)
-        else:
-            raise NotImplementedError(f"Unsupported BooleanClauseList operator: {op}")
+            for subcond in cond.clauses:
+                stream = self._apply_condition(subcond, stream)
 
-        return list(result)
+            return stream
+
+        elif op is operators.or_:
+            # Materialize the stream once and tee for each OR branch
+
+            streams = tee(stream, len(cond.clauses))
+            substreams = [
+                self._apply_condition(subcond, s)
+                for subcond, s in zip(cond.clauses, streams)
+            ]
+            return _dedup_chain(*substreams)
+
+        raise NotImplementedError(f"Unsupported BooleanClauseList op: {op}")
 
     def _resolve_rhs(self, rhs):
         if isinstance(rhs, BindParameter):
@@ -109,7 +166,7 @@ class MemoryQuery(Query):
         else:
             raise NotImplementedError(f"Unsupported RHS: {type(rhs)}")
 
-    def _apply_binary_condition(self, cond: BinaryExpression, collection):
+    def _apply_binary_condition(self, cond: BinaryExpression, stream, is_first=False):
         # Extract the Python value it's being compared to
         value = self._resolve_rhs(cond.right)
 
@@ -138,75 +195,66 @@ class MemoryQuery(Query):
         op = cond.operator
 
         # Use index if available
-        index_result = self.store.query_index(collection, table_name, attr_name, op, value)
+        index_result = self.store.query_index(stream, table_name, attr_name, op, value, collection_is_full_table=is_first)
         if index_result is not None:
             return index_result
 
         if op in OPERATOR_ADAPTERS:
             op = OPERATOR_ADAPTERS[op](value)
 
-        return [
-            item for item in collection
-            if op(accessor(item, attr_name), value)
-        ]
+        return (item for item in stream if op(accessor(item, attr_name), value))
 
-    def _apply_condition(self, cond, collection):
+    def _apply_condition(self, cond, stream, is_first=False):
         if isinstance(cond, Grouping):
             # Unwrap
-            return self._apply_condition(cond.element, collection)
+            return self._apply_condition(cond.element, stream)
 
         if isinstance(cond, BinaryExpression):
             # Represent an expression that is ``LEFT <operator> RIGHT``
-            return self._apply_binary_condition(cond, collection)
+            return self._apply_binary_condition(cond, stream, is_first=is_first)
 
         if isinstance(cond, BooleanClauseList):
             # and_ / or_ expressions
-            return self._apply_boolean_condition(cond, collection)
+            return self._apply_boolean_condition(cond, stream)
 
         raise NotImplementedError(f"Unsupported condition type: {type(cond)}")
 
     def _execute_query(self):
-        collection = self.store.data.get(self.tablename, [])
-        if not collection:
+        stream = iter(self.store.data.get(self.tablename, []))
+        if not stream:
             logger.debug(f"Table '{self.tablename}' is empty")
-            return collection
+            return []
 
         # Apply conditions
         conditions = sorted(self._where_criteria, key=self._get_condition_selectivity)
-
-        for condition in conditions:
-            collection = self._apply_condition(condition, collection)
-
-            if len(collection) == 0:
-                # No need to go further
-                return collection
+        for idx, condition in enumerate(conditions):
+            stream = self._apply_condition(condition, stream, is_first=(idx == 0))
 
         # Apply order by
-        for clause in reversed(self._order_by or []):
-            reverse = False
+        if self._order_by:
+            stream = list(stream)
+            for clause in reversed(self._order_by):
+                col = clause.element if isinstance(clause, UnaryExpression) else clause
+                reverse = isinstance(clause, UnaryExpression) and clause.modifier is operators.desc_op
+                stream = sorted(stream, key=lambda x: getattr(x, col.name), reverse=reverse)
 
-            if isinstance(clause, UnaryExpression):
-                if clause.modifier is operators.desc_op:
-                    reverse = True
-                elif clause.modifier is operators.asc_op:
-                    reverse = False
-                col = clause.element
-            else:
-                col = clause
+        # Offset / limit
+        if self._limit or self._offset:
+            start = self._offset or 0
+            stop = start + self._limit if self._limit else None
+            stream = islice(stream, start, stop)
 
-            collection = sorted(collection, key=lambda x: getattr(x, col.name), reverse=reverse)
-
-        # Apply offset
-        if self._offset is not None:
-            collection = collection[self._offset:]
-
-        # Apply limit
-        if self._limit is not None:
-            collection = collection[:self._limit]
-
-        return collection
+        return stream
 
     def _get_condition_selectivity(self, cond):
+        """
+        Estimate the selectivity of a single WHERE condition.
+
+        This method is used to rank or sort WHERE conditions by their estimated
+        filtering power. A lower selectivity value indicates that the condition
+        is expected to filter out more rows (i.e., fewer rows remain after applying it),
+        making it more selective.
+        """
         total_count = self.store.count(self.tablename)
 
         if not isinstance(cond, BinaryExpression):
@@ -228,3 +276,114 @@ class MemoryQuery(Query):
             value=value,
             total_count=total_count
         )
+
+    def _extract_table_from_column(self, c):
+        if isinstance(c, AnnotatedTable):
+            return c
+
+        if isinstance(c, AnnotatedColumn):
+            return c.table
+
+        if isinstance(c, DeclarativeMeta):
+            # Old session.query(...) api
+            return c.__table__
+
+        if isinstance(c, Label):
+            return self._extract_table_from_column(c.element)
+
+        if isinstance(c, Function):
+            clause = next(iter(c.clauses))
+            return self._extract_table_from_column(clause)
+
+    def _extract_table_from_raw_columns(self):
+        _tables = [
+            self._extract_table_from_column(c)
+            for c in self._statement._raw_columns
+        ]
+
+        if len(set(_tables)) == 1:
+            return _tables[0]
+
+        _tables = list(set(_tables))
+        # Try to find a "root" table by checking if it has relationship to other tables
+        for candidate in _tables:
+            others = set(_tables) - {candidate}
+            candidate_columns = candidate.columns if hasattr(candidate, "columns") else []
+
+            foreign = [
+                fk.column.table
+                for col in candidate_columns
+                for fk in col.foreign_keys
+            ]
+            if all(other in foreign for other in others):
+                return candidate
+
+    def _project(self, stream):
+        """
+        Apply SELECT column projection to the final collection.
+
+        Supports raw columns, labels, and simple aggregates.
+        """
+
+        if not self.is_select:
+            return stream
+
+        cols = self._statement._raw_columns
+
+        # Bypass projection if this is a simple SELECT [table]
+        if all(isinstance(c, (AnnotatedTable, DeclarativeMeta, Join)) for c in cols):
+            return stream
+
+        group_by = self._statement._group_by_clauses
+
+        if group_by:
+            grouped = {}
+            for item in stream:
+                key = tuple(getattr(item, col.name) for col in group_by)
+                grouped.setdefault(key, []).append(item)
+
+            result = []
+            for key, group_items in grouped.items():
+                row = []
+                for col in cols:
+                    value = self._evaluate_column(col, group_items)
+                    row.append(value)
+                result.append(tuple(row))
+            return result
+
+        else:
+            return (
+                tuple(self._evaluate_column(col, [item]) for col in cols)
+                for item in stream
+            )
+
+    def _evaluate_column(self, col, items):
+        """
+        Evaluate a column or expression over one or many items.
+        """
+        if isinstance(col, Label):
+            return self._evaluate_column(col.element, items)
+
+        if isinstance(col, AnnotatedColumn):
+            return getattr(items[0], col.name)
+
+        if isinstance(col, FunctionElement):
+            fn_name = col.name.lower()
+            col_expr = next(iter(col.clauses))
+            values = [getattr(item, col_expr.name) for item in items]
+
+            if fn_name == "count":
+                return len(values)
+            elif fn_name == "sum":
+                return sum(values)
+            elif fn_name == "min":
+                return min(values)
+            elif fn_name == "max":
+                return max(values)
+            elif fn_name == "avg":
+                return sum(values) / len(values) if values else None
+            else:
+                raise NotImplementedError(f"Function not supported: {fn_name}")
+
+        raise NotImplementedError(f"Column type not handled: {type(col)}")
+

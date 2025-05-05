@@ -202,11 +202,8 @@ class InMemoryStore:
                 else:
                     raise Exception(f"Unhandled server_default type: {type(column.server_default)}")
 
-    def query_index(self, collection, table_name, attr_name, op, value):
-        result = self.index_manager.query(collection, table_name, attr_name, op, value)
-        if result is not None:
-            logger.debug(f"Reduced '{table_name}' dataset from {len(collection)} items to {len(result)} by using index on '{attr_name}")
-        return result
+    def query_index(self, stream, table_name, attr_name, op, value, **kwargs):
+        return self.index_manager.query(stream, table_name, attr_name, op, value, **kwargs)
 
     def count(self, tablename):
         return len(self.data[tablename])

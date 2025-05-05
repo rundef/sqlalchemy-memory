@@ -5,6 +5,8 @@ This benchmark compares `sqlalchemy-memory` to `in-memory SQLite` using 20,000 i
 
 As the results show, `sqlalchemy-memory` **excels in read-heavy workloads**, delivering significantly faster query performance. While SQLite performs slightly better on update and delete operations, the overall runtime of `sqlalchemy-memory` remains substantially lower, making it a strong choice for prototyping and simulation.
 
+`Check the benchmark script on GitHub <https://github.com/rundef/sqlalchemy-memory/blob/main/benchmark.py>`_
+
 .. list-table::
    :header-rows: 1
    :widths: 25 25 25
@@ -13,17 +15,20 @@ As the results show, `sqlalchemy-memory` **excels in read-heavy workloads**, del
      - SQLite (in-memory)
      - sqlalchemy-memory
    * - Insert
-     - 3.17 sec
-     - 2.70 sec
-   * - 500 Select Queries
-     - 26.37 sec
-     - 2.94 sec
+     - 3.30 sec
+     - **3.10 sec**
+   * - 500 Select Queries (all())
+     - 30.07 sec
+     - **4.14 sec**
+   * - 500 Select Queries (limit(5))
+     - **0.24** sec
+     - 0.30 sec
    * - 500 Updates
-     - 0.26 sec
-     - 1.12 sec
+     - 0.25 sec
+     - **0.19** sec
    * - 500 Deletes
-     - 0.09 sec
-     - 0.90 sec
-   * - **Total Runtime**
-     - **29.89 sec**
-     - **7.66 sec**
+     - **0.09** sec
+     - **0.09** sec
+   * - *Total Runtime*
+     - 33.95 sec
+     - **7.81 sec**

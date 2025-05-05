@@ -74,6 +74,41 @@ class TestIndexes:
         results = index.query("products", "price_index", **query_kwargs)
         assert {r.id for r in results} == expected_ids
 
+    def test_index_manager(self):
+        mgr = IndexManager()
+        mgr.table_indexes = {
+            "products": {
+                "id": ["id"],
+                "price_index": ["price"]
+            }
+        }
+
+        objs = [
+            MagicMock(id=1, price=10, __tablename__="products"),
+            MagicMock(id=2, price=30, __tablename__="products"),
+            MagicMock(id=3, price=20, __tablename__="products"),
+        ]
+
+        for obj in objs:
+            mgr.on_insert(obj)
+
+        for full in [True, False]:
+            result = list(mgr.query(objs, "products", "id", operators.in_op, [2, 3], collection_is_full_table=full))
+            assert len(result) == 2
+            assert set(r.id for r in result) == {2, 3}
+
+        for full in [True, False]:
+            result = list(mgr.query(objs, "products", "id", operators.notin_op, [1, 2], collection_is_full_table=full))
+            assert len(result) == 1
+            assert set(r.id for r in result) == {3}
+
+        for full in [True, False]:
+            result = list(mgr.query(objs, "products", "id", operators.gt, 1, collection_is_full_table=full))
+            assert len(result) == 2
+            assert set(r.id for r in result) == {2, 3}
+
+
+
     @pytest.mark.parametrize("query_kwargs,expected_ids", [
         # All ES assets
         ({"gte": ("ES", -float("inf")), "lte": ("ES", float("inf"))}, {1, 2}),
@@ -169,39 +204,39 @@ class TestIndexes:
             store = session.store
             collection = store.data[tablename]
 
-            assert len(store.query_index(collection, tablename, "active", operators.eq, True)) == 2
-            assert len(store.query_index(collection, tablename, "active", operators.ne, True)) == 0
-            assert len(store.query_index(collection, tablename, "active", operators.eq, False)) == 0
-            assert len(store.query_index(collection, tablename, "active", operators.ne, False)) == 2
+            assert len(list(store.query_index(collection, tablename, "active", operators.eq, True))) == 2
+            assert len(list(store.query_index(collection, tablename, "active", operators.ne, True))) == 0
+            assert len(list(store.query_index(collection, tablename, "active", operators.eq, False))) == 0
+            assert len(list(store.query_index(collection, tablename, "active", operators.ne, False))) == 2
 
-            assert len(store.query_index(collection, tablename, "category", operators.eq, "A")) == 1
-            assert len(store.query_index(collection, tablename, "category", operators.eq, "B")) == 1
-            assert len(store.query_index(collection, tablename, "category", operators.eq, "Z")) == 0
+            assert len(list(store.query_index(collection, tablename, "category", operators.eq, "A"))) == 1
+            assert len(list(store.query_index(collection, tablename, "category", operators.eq, "B"))) == 1
+            assert len(list(store.query_index(collection, tablename, "category", operators.eq, "Z"))) == 0
 
             # Assert nothing was changed on rollback
             item = session.get(ProductWithIndex, 2)
             item.category = "Z"
             session.rollback()
-            assert len(store.query_index(collection, tablename, "category", operators.eq, "A")) == 1
-            assert len(store.query_index(collection, tablename, "category", operators.eq, "B")) == 1
-            assert len(store.query_index(collection, tablename, "category", operators.eq, "Z")) == 0
+            assert len(list(store.query_index(collection, tablename, "category", operators.eq, "A"))) == 1
+            assert len(list(store.query_index(collection, tablename, "category", operators.eq, "B"))) == 1
+            assert len(list(store.query_index(collection, tablename, "category", operators.eq, "Z"))) == 0
 
             # Assert index was synchronized after update
             item = session.get(ProductWithIndex, 2)
             item.category = "Z"
             session.commit()
 
-            assert len(store.query_index(collection, tablename, "category", operators.eq, "A")) == 1
-            assert len(store.query_index(collection, tablename, "category", operators.eq, "B")) == 0
-            assert len(store.query_index(collection, tablename, "category", operators.eq, "Z")) == 1
+            assert len(list(store.query_index(collection, tablename, "category", operators.eq, "A"))) == 1
+            assert len(list(store.query_index(collection, tablename, "category", operators.eq, "B"))) == 0
+            assert len(list(store.query_index(collection, tablename, "category", operators.eq, "Z"))) == 1
 
             # Assert nothing was changed on rollback
             session.delete(collection[0])
             session.rollback()
-            assert len(store.query_index(collection, tablename, "active", operators.eq, True)) == 2
+            assert len(list(store.query_index(collection, tablename, "active", operators.eq, True))) == 2
 
             # Assert index was synchronized after deletion
             session.delete(collection[0])
             session.commit()
-            assert len(store.query_index(collection, tablename, "active", operators.eq, True)) == 1
-            assert len(store.query_index(collection, tablename, "active", operators.eq, False)) == 0
+            assert len(list(store.query_index(collection, tablename, "active", operators.eq, True))) == 1
+            assert len(list(store.query_index(collection, tablename, "active", operators.eq, False))) == 0

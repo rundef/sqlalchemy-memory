@@ -37,6 +37,15 @@ Data is kept purely in RAM and is **volatile**: it is **not persisted across app
 - **Commit/rollback support**
 - **Index support**: indexes are recognized and used for faster lookups
 - **Merge and `get()` support**: like real SQLAlchemy behavior
+- **Lazy query evaluation**: supports generator pipelines and short-circuiting
+  - `first()`-style queries avoid scanning the full dataset
+  - Optimized for read-heavy workloads and streaming filters
+
+## Benchmark
+
+Curious how `sqlalchemy-memory` stacks up?
+
+[View Benchmark Results](https://sqlalchemy-memory.readthedocs.io/en/latest/benchmarks.html) comparing `sqlalchemy-memory` to `in-memory SQLite`
 
 ## Installation
 

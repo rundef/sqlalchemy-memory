@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy import select
 
 from models import Item

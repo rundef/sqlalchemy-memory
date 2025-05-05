@@ -1,6 +1,7 @@
 from collections import defaultdict
 from sortedcontainers import SortedDict
-from typing import Any, List
+from typing import Any, List, Generator
+from itertools import chain
 from sqlalchemy.sql import operators
 
 from ..helpers.ordered_set import OrderedSet
@@ -108,62 +109,84 @@ class IndexManager:
             self.hash_index.add(tablename, indexname, new_value, obj)
             self.range_index.add(tablename, indexname, new_value, obj)
 
-    def query(self, collection, tablename, colname, operator, value):
+    def query(self, collection, tablename, colname, operator, value, collection_is_full_table=False):
         indexname = self._column_to_index(tablename, colname)
         if not indexname:
             return None
 
-        # Use hash index for = / != / IN / NOT IN operators
         if operator == operators.eq:
             result = self.hash_index.query(tablename, indexname, value)
-            return list(set(result) & set(collection))
+            if collection_is_full_table:
+                return result
+            return (item for item in collection if item in result)
 
         elif operator == operators.ne:
-            # All values except the given one
             excluded = self.hash_index.query(tablename, indexname, value)
-            return list(set(collection) - set(excluded))
+            return (item for item in collection if item not in excluded)
 
         elif operator == operators.in_op:
-            result = []
-            for v in value:
-                result.extend(self.hash_index.query(tablename, indexname, v))
-            return list(set(result) & set(collection))
+            result = chain.from_iterable(
+                self.hash_index.query(tablename, indexname, v) for v in value
+            )
+            if collection_is_full_table:
+                return result
+            result = set(result)
+            return (item for item in collection if item in result)
 
         elif operator == operators.notin_op:
-            excluded = []
-            for v in value:
-                excluded.extend(self.hash_index.query(tablename, indexname, v))
-            return list(set(collection) - set(excluded))
+            excluded = set(chain.from_iterable(
+                self.hash_index.query(tablename, indexname, v) for v in value
+            ))
+            return (item for item in collection if item not in excluded)
 
-        # Use range index
-        if operator == operators.gt:
+        elif operator == operators.gt:
             result = self.range_index.query(tablename, indexname, gt=value)
-            return list(set(result) & set(collection))
+            if collection_is_full_table:
+                return result
+            result = set(result)
+            return (item for item in collection if item in result)
 
         elif operator == operators.ge:
             result = self.range_index.query(tablename, indexname, gte=value)
-            return list(set(result) & set(collection))
+            if collection_is_full_table:
+                return result
+            result = set(result)
+            return (item for item in collection if item in result)
 
         elif operator == operators.lt:
             result = self.range_index.query(tablename, indexname, lt=value)
-            return list(set(result) & set(collection))
+            if collection_is_full_table:
+                return result
+            result = set(result)
+            return (item for item in collection if item in result)
 
         elif operator == operators.le:
             result = self.range_index.query(tablename, indexname, lte=value)
-            return list(set(result) & set(collection))
+            if collection_is_full_table:
+                return result
+            result = set(result)
+            return (item for item in collection if item in result)
 
         elif operator == operators.between_op and isinstance(value, (tuple, list)) and len(value) == 2:
             result = self.range_index.query(tablename, indexname, gte=value[0], lte=value[1])
-            return list(set(result) & set(collection))
+            if collection_is_full_table:
+                return result
+            result = set(result)
+            return (item for item in collection if item in result)
 
         elif operator == operators.not_between_op and isinstance(value, (tuple, list)) and len(value) == 2:
-            in_range = self.range_index.query(tablename, indexname, gte=value[0], lte=value[1])
-            return list(set(collection) - set(in_range))
+            in_range = set(self.range_index.query(tablename, indexname, gte=value[0], lte=value[1]))
+            return (item for item in collection if item not in in_range)
 
     
     def get_selectivity(self, tablename, colname, operator, value, total_count):
         """
-        Estimate selectivity: higher means worst filtering.
+        Estimate the selectivity of a single WHERE condition.
+
+        This method is used to rank or sort WHERE conditions by their estimated
+        filtering power. A lower selectivity value indicates that the condition
+        is expected to filter out more rows (i.e., fewer rows remain after applying it),
+        making it more selective.
         """
 
         indexname = self._column_to_index(tablename, colname)
@@ -220,7 +243,7 @@ class HashIndex:
             del self.index[tablename][indexname][value]
 
     def query(self, tablename: str, indexname: str, value: Any) -> List[Any]:
-        return list(self.index[tablename][indexname].get(value, []))
+        return self.index[tablename][indexname].get(value, [])
 
 
 class RangeIndex:
@@ -255,7 +278,7 @@ class RangeIndex:
             except ValueError:
                 pass
 
-    def query(self, tablename: str, indexname: str, gt=None, gte=None, lt=None, lte=None) -> List[Any]:
+    def query(self, tablename: str, indexname: str, gt=None, gte=None, lt=None, lte=None) -> Generator:
         sd = self.index[tablename][indexname]
 
         # Define range bounds
@@ -264,14 +287,10 @@ class RangeIndex:
         inclusive_min = gte is not None
         inclusive_max = lte is not None
 
-        irange = sd.irange(
+        keys = sd.irange(
             minimum=min_key,
             maximum=max_key,
             inclusive=(inclusive_min, inclusive_max)
         )
 
-        result = []
-        for key in irange:
-            result.extend(sd[key])
-
-        return result
+        return chain.from_iterable(sd[key] for key in keys)
