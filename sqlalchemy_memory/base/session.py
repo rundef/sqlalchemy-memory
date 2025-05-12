@@ -1,15 +1,17 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.selectable import Select, SelectLabelStyle
 from sqlalchemy.sql.dml import Insert, Delete, Update
-from sqlalchemy.engine import IteratorResult
+from sqlalchemy.engine import IteratorResult, ChunkedIteratorResult
 from sqlalchemy.engine.cursor import SimpleResultMetaData
-from functools import lru_cache
+from sqlalchemy.sql.annotation import AnnotatedTable
+from functools import partial
 
 from unittest.mock import MagicMock
 
 from .query import MemoryQuery
 from .pending_changes import PendingChanges
 from ..logger import logger
+from ..helpers.utils import chunk_generator
 
 class MemorySession(Session):
     def __init__(self, *args, **kwargs):
@@ -46,21 +48,9 @@ class MemorySession(Session):
         return self.execute(statement, **kwargs).scalar()
 
     @staticmethod
-    @lru_cache(maxsize=256)
-    def _get_metadata_for_table(table):
-        """
-        Build minimal cursor metadata
-        """
-        col_names = [col.name for col in table._columns]
-        return SimpleResultMetaData([
-            (col_name, None, None, None, None, None, None)
-            for col_name in col_names
-        ])
-
-    @staticmethod
     def _get_metadata_from_columns(columns):
         return SimpleResultMetaData([
-            (getattr(col, "name", str(col)), None, None, None, None, None, None)
+            getattr(col, "name", str(col))
             for col in columns
         ])
 
@@ -71,7 +61,9 @@ class MemorySession(Session):
 
         metadata = self._get_metadata_from_columns(statement._raw_columns)
 
-        if statement._label_style is SelectLabelStyle.LABEL_STYLE_LEGACY_ORM:
+        if statement._label_style is SelectLabelStyle.LABEL_STYLE_LEGACY_ORM and all(
+            isinstance(c, AnnotatedTable) for c in statement._raw_columns
+        ):
             """
             Support for legacy session.query(...) style
             """
@@ -80,9 +72,9 @@ class MemorySession(Session):
             it._generate_rows = False
             return it
 
-        # Wrap each object in a single‑element tuple, so .scalars() yields it
-        results = ((r,) for r in results)
-        return IteratorResult(metadata, results)
+        it = ChunkedIteratorResult(metadata, partial(chunk_generator, results))
+
+        return it
 
 
     def _handle_delete(self, statement: Delete, **kwargs):
@@ -123,10 +115,7 @@ class MemorySession(Session):
         # Handle RETURNING(...)
         if statement._returning:
             cols = list(statement._returning)
-            metadata = SimpleResultMetaData([
-                (col.name, None, None, None, None, None, None)
-                for col in cols
-            ])
+            metadata = self._get_metadata_from_columns(cols)
             rows = [
                 tuple(getattr(obj, col.name) for col in cols)
                 for obj in instances

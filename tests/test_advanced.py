@@ -1,6 +1,7 @@
 from sqlalchemy import select, func, and_, or_, not_, case
 from sqlalchemy.orm import joinedload, selectinload
 from datetime import datetime, date
+from sqlalchemy.sql.annotation import AnnotatedTable
 import pytest
 
 from models import Item, Product, ProductWithIndex, Vendor
@@ -257,8 +258,8 @@ class TestAdvanced:
                 assert len(results) == 1
 
     @pytest.mark.parametrize("query", [
-        select(ProductWithIndex),
-        select(ProductWithIndex.id, ProductWithIndex.name),
+        lambda: select(ProductWithIndex),
+        lambda: select(ProductWithIndex.id, ProductWithIndex.name, ProductWithIndex.category),
 
         # Join shouldn't affect anything
         lambda: select(ProductWithIndex).options(joinedload(ProductWithIndex.vendor)),
@@ -266,6 +267,7 @@ class TestAdvanced:
         lambda: select(
             ProductWithIndex.id,
             ProductWithIndex.name,
+            ProductWithIndex.category,
         ).join(ProductWithIndex.vendor)
     ])
     def test_select_subset_of_columns(self, SessionFactory, query):
@@ -288,9 +290,10 @@ class TestAdvanced:
             if callable(query):
                 query = query()
 
-            results = session.execute(query).scalars().all()
+            results = session.execute(query)
 
-            assert len(results) == 3
+            if isinstance(query._raw_columns[0], AnnotatedTable):
+                results = results.scalars()
 
             # We get the objects straight back, no column selection
             assert {
@@ -355,7 +358,8 @@ class TestAdvanced:
             ])
             session.commit()
 
-            results = session.execute(query).scalars().all()
+            results = session.execute(query)
+            results = list(results)
 
             assert len(results) == len(expected)
             for idx, (result, expected_result) in enumerate(zip(results, expected)):

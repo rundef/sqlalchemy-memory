@@ -1,7 +1,7 @@
 from sqlalchemy.sql.elements import (
     UnaryExpression, BinaryExpression, BindParameter, ExpressionClauseList, BooleanClauseList,
     Grouping, True_, False_, Null,
-    Label,
+    Label, Case,
 )
 from sqlalchemy.sql.functions import FunctionElement
 from sqlalchemy.sql import operators
@@ -101,7 +101,9 @@ class MemoryQuery(Query):
         return self._statement._where_criteria
 
     def iter_items(self):
-        return self._execute_query()
+        gen = self._execute_query()
+        gen = self._project(gen)
+        return gen
 
     def first(self):
         gen = self.iter_items()
@@ -112,8 +114,6 @@ class MemoryQuery(Query):
 
     def all(self):
         gen = self.iter_items()
-        gen = self._project(gen)
-        #print(items)
         return list(gen)
 
     def filter(self, condition):
@@ -329,18 +329,22 @@ class MemoryQuery(Query):
             return stream
 
         cols = self._statement._raw_columns
-
-        # Bypass projection if this is a simple SELECT [table]
-        if all(isinstance(c, (AnnotatedTable, DeclarativeMeta, Join)) for c in cols):
-            return stream
-
         group_by = self._statement._group_by_clauses
 
-        if group_by:
+        # Bypass projection if this is a simple SELECT [table]
+        if not group_by and all(isinstance(c, (AnnotatedTable, DeclarativeMeta, Join)) for c in cols):
+            return stream
+
+        if group_by or self._contains_aggregation_function(cols):
             grouped = {}
-            for item in stream:
-                key = tuple(getattr(item, col.name) for col in group_by)
-                grouped.setdefault(key, []).append(item)
+            if group_by:
+                for item in stream:
+                    key = tuple(getattr(item, col.name) for col in group_by)
+                    grouped.setdefault(key, []).append(item)
+            else:
+                grouped = {
+                    "_all_": [item for item in stream]
+                }
 
             result = []
             for key, group_items in grouped.items():
@@ -357,15 +361,45 @@ class MemoryQuery(Query):
                 for item in stream
             )
 
+    def _contains_aggregation_function(self, cols):
+        for c in cols:
+            if isinstance(c, Label):
+                c = c.element
+
+            if isinstance(c, FunctionElement):
+                if c.name.lower() in ["count", "sum", "min", "max", "avg"]:
+                    return True
+
+        return False
+
     def _evaluate_column(self, col, items):
         """
         Evaluate a column or expression over one or many items.
         """
+
+        if isinstance(col, AnnotatedTable):
+            return items[0]
+
         if isinstance(col, Label):
             return self._evaluate_column(col.element, items)
 
         if isinstance(col, AnnotatedColumn):
-            return getattr(items[0], col.name)
+
+            if self.tablename == col.table.name:
+                # Column belongs to the primary ORM model
+                return getattr(items[0], col.name)
+
+            else:
+                # Column belongs to a related model
+                item = items[0]
+                rel_name = col.table.name  # e.g., 'vendors'
+                # Find matching attribute on the main object
+                for attr_name in vars(item):
+                    attr = getattr(item, attr_name, None)
+                    if hasattr(attr, "__table__") and attr.__table__.name == rel_name:
+                        return getattr(attr, col.name)
+
+                raise ValueError(f"Could not find related model '{rel_name}' on '{type(item).__name__}'")
 
         if isinstance(col, FunctionElement):
             fn_name = col.name.lower()
@@ -385,5 +419,36 @@ class MemoryQuery(Query):
             else:
                 raise NotImplementedError(f"Function not supported: {fn_name}")
 
+        if isinstance(col, Case):
+            for condition_expr, result_expr in col.whens:
+                condition_value = self._evaluate_expression(condition_expr, items)
+                if condition_value:
+                    return self._evaluate_expression(result_expr, items)
+
+            # No condition matched; return else_
+            return self._evaluate_expression(col.else_, items)
+
         raise NotImplementedError(f"Column type not handled: {type(col)}")
+
+    def _evaluate_expression(self, expr, items):
+        """
+        Evaluate an expression (which might be a Grouping, BinaryExpression, BindParameter, etc.).
+        """
+
+        if isinstance(expr, BindParameter):
+            return expr.value
+
+        if isinstance(expr, Grouping):
+            return self._evaluate_expression(expr.element, items)
+
+        if isinstance(expr, BinaryExpression):
+            left = self._evaluate_expression(expr.left, items)
+            right = self._evaluate_expression(expr.right, items)
+            op = expr.operator
+            return op(left, right)
+
+        if isinstance(expr, AnnotatedColumn):
+            return self._evaluate_column(expr, items)
+
+        raise NotImplementedError(f"Unsupported expression type: {type(expr)}")
 
