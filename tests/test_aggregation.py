@@ -46,11 +46,10 @@ class TestAggregation:
 
             result = session.execute(query_fn()).mappings().one()
 
-            print(result)
             assert result == expected
 
     def test_group_by(self, SessionFactory):
-        with (SessionFactory() as session):
+        with SessionFactory() as session:
             session.add_all([
                 ProductWithIndex(id=1, name="foo", category="A", vendor_id=10),
                 ProductWithIndex(id=2, name="bar", category="B", vendor_id=10),
