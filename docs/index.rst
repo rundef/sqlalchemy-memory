@@ -3,6 +3,8 @@ Welcome to sqlalchemy-memory's documentation!
 
 `sqlalchemy-memory` is a pure in-memory backend for SQLAlchemy 2.0 that supports both sync and async modes, with full compatibility for SQLAlchemy Core and ORM.
 
+📦 GitHub: https://github.com/rundef/sqlalchemy-memory
+
 Quickstart: sync example
 ------------------------
 

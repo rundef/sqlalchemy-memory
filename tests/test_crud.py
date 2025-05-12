@@ -31,6 +31,26 @@ class TestCRUD:
                 assert items[2].id == 3
                 assert items[2].name == "fba"
 
+    def test_insert_returning(self, sqlite_SessionFactory, SessionFactory):
+        with sqlite_SessionFactory() as session:
+            stmt = insert(Item).values(name="foo").returning(Item.id, Item.name)
+            result = session.execute(stmt)
+            returned = result.first()
+
+            assert returned is not None
+            assert returned.id > 0
+            assert returned.name == "foo"
+
+            # The row exists in the transaction, but not in the DB
+            item = session.get(Item, returned.id)
+            assert item is not None
+
+            session.rollback()
+
+            # Now the row is gone
+            item = session.get(Item, returned.id)
+            assert item is None
+
 
     def test_update(self, SessionFactory):
         with SessionFactory() as session:

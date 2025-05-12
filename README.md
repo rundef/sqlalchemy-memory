@@ -36,7 +36,15 @@ Data is kept purely in RAM and is **volatile**: it is **not persisted across app
 - **Zero I/O overhead**: pure in‑RAM storage (`dict`/`list` under the hood)
 - **Commit/rollback support**
 - **Index support**: indexes are recognized and used for faster lookups
-- **Merge and `get()` support**: like real SQLAlchemy behavior
+- **Lazy query evaluation**: supports generator pipelines and short-circuiting
+  - `first()`-style queries avoid scanning the full dataset
+  - Optimized for read-heavy workloads and streaming filters
+
+## Benchmark
+
+Curious how `sqlalchemy-memory` stacks up?
+
+[View Benchmark Results](https://sqlalchemy-memory.readthedocs.io/en/latest/benchmarks.html) comparing `sqlalchemy-memory` to `in-memory SQLite`
 
 ## Installation
 
@@ -47,25 +55,6 @@ pip install sqlalchemy-memory
 ## Documentation
 
 [See the official documentation for usage examples](https://sqlalchemy-memory.readthedocs.io/en/latest/)
-
-
-## Status
-
-Currently supports basic functionality equivalent to:
-
-- SQLite in-memory behavior for ORM + Core queries
-
-- `declarative_base()` model support
-
-Coming soon:
-
-- `func.count()` / aggregations
-
-- Joins and relationships (limited)
-
-- Compound indexes
-
-- Better expression support in `update(...).values()` (e.g., +=)
 
 ## Testing
 

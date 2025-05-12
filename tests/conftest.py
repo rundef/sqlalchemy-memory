@@ -41,3 +41,10 @@ async def AsyncSessionFactory():
         sync_session_class=MemorySession,
         expire_on_commit=False,
     )
+
+@pytest.fixture
+def sqlite_SessionFactory():
+    engine = create_engine("sqlite:///:memory:", echo=False)
+    Base.metadata.create_all(engine)
+
+    yield sessionmaker(engine)

@@ -1,16 +1,15 @@
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, select, Index, update, delete
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, select, Float, update, delete, bindparam, literal
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.sql import operators
+from sqlalchemy.sql.elements import BinaryExpression
 from sqlalchemy_memory import MemorySession
 import argparse
 import time
 import random
 from faker import Faker
 
-try:
-    from sqlalchemy_memory import create_memory_engine
-except ImportError:
-    create_memory_engine = None
 
+random.seed(42)
 Base = declarative_base()
 fake = Faker()
 CATEGORIES = list("ABCDEFGHIJK")
@@ -22,22 +21,46 @@ class Item(Base):
     name = Column(String)
     active = Column(Boolean, index=True)
     category = Column(String, index=True)
+    price = Column(Float, index=True)
+    cost = Column(Float)
 
 def generate_items(n):
     for _ in range(n):
         yield Item(
             name=fake.name(),
             active=random.choice([True, False]),
-            category=random.choice(CATEGORIES)
+            category=random.choice(CATEGORIES),
+            price=round(random.uniform(5, 500), 2),
+            cost=round(random.uniform(1, 300), 2),
         )
 
 def generate_random_select_query():
     clauses = []
+
     if random.random() < 0.5:
-        clauses.append(Item.active == random.choice([True, False]))
-    if random.random() < 0.5 or not clauses:
+        val = random.choice([True, False])
+        op = random.choice([operators.eq, operators.ne])
+        clauses.append(BinaryExpression(Item.active, literal(val), op))
+
+    if random.random() < 0.7:
         subset = random.sample(CATEGORIES, random.randint(1, 4))
-        clauses.append(Item.category.in_(subset))
+        op = random.choice([operators.in_op, operators.notin_op])
+        param = bindparam("category_list", subset, expanding=True)
+        clauses.append(BinaryExpression(Item.category, param, op))
+
+    if random.random() < 0.6:
+        price_val = round(random.uniform(10, 400), 2)
+        op = random.choice([operators.gt, operators.lt, operators.le, operators.gt])
+        clauses.append(BinaryExpression(Item.price, literal(price_val), op))
+
+    if random.random() < 0.3:
+        cost_val = round(random.uniform(10, 200), 2)
+        op = random.choice([operators.gt, operators.lt, operators.le, operators.gt])
+        clauses.append(BinaryExpression(Item.cost, literal(cost_val), op))
+
+    if not clauses:
+        clauses.append(Item.active == True)
+
     return select(Item).where(*clauses)
 
 def inserts(Session, count):
@@ -49,15 +72,24 @@ def inserts(Session, count):
     print(f"Inserted {count} items in {insert_duration:.2f} seconds.")
     return insert_duration
 
-def selects(Session, count):
+def selects(Session, count, fetch_type):
     queries = [generate_random_select_query() for _ in range(count)]
 
     query_start = time.time()
     with Session() as session:
         for stmt in queries:
-            list(session.execute(stmt).scalars())
+            if fetch_type == "limit":
+                stmt = stmt.limit(5)
+
+            result = session.execute(stmt)
+
+            if fetch_type == "first":
+                result.first()
+            else:
+                list(result.scalars())
+
     query_duration = time.time() - query_start
-    print(f"Executed {count} select queries in {query_duration:.2f} seconds.")
+    print(f"Executed {count} select queries ({fetch_type}) in {query_duration:.2f} seconds.")
     return query_duration
 
 def updates(Session, random_ids):
@@ -105,7 +137,8 @@ def run_benchmark(db_type="sqlite", count=100_000):
     Base.metadata.create_all(engine)
 
     elapsed = inserts(Session, count)
-    elapsed += selects(Session, 500)
+    elapsed += selects(Session, 500, fetch_type="all")
+    elapsed += selects(Session, 500, fetch_type="limit")
 
     random_ids = random.sample(range(1, count + 1), 500)
     elapsed += updates(Session, random_ids)
