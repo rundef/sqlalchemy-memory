@@ -12,7 +12,7 @@ A pure‑Python SQLAlchemy 2.0 dialect that runs entirely in RAM.
 It avoids typical database I/O and ORM overhead while maintaining full compatibility with the SQLAlchemy 2.0 Core and ORM APIs.
 Ideal for rapid prototyping, backtesting engines, simulations.
 
-## Why ?
+## ❓ Why ?
 
 This project was inspired by the idea of building a **fast, introspectable, no-dependency backend** for SQLAlchemy.
 
@@ -30,7 +30,7 @@ It is also perfect for **applications that need a lightweight, high-performance 
 
 Data is kept purely in RAM and is **volatile**: it is **not persisted across application restarts** and is **cleared when the engine is disposed**.
 
-## Features
+## ✨ Features
 
 - **SQLAlchemy 2.0 support**: ORM & Core expressions, sync & async modes
 - **Zero I/O overhead**: pure in‑RAM storage (`dict`/`list` under the hood)
@@ -40,27 +40,27 @@ Data is kept purely in RAM and is **volatile**: it is **not persisted across app
   - `first()`-style queries avoid scanning the full dataset
   - Optimized for read-heavy workloads and streaming filters
 
-## Benchmark
+## 📊 Benchmark
 
 Curious how `sqlalchemy-memory` stacks up?
 
 [View Benchmark Results](https://sqlalchemy-memory.readthedocs.io/en/latest/benchmarks.html) comparing `sqlalchemy-memory` to `in-memory SQLite`
 
-## Installation
+## 📦 Installation
 
 ```bash
 pip install sqlalchemy-memory
 ```
 
-## Documentation
+## 📘 Documentation
 
-[See the official documentation for usage examples](https://sqlalchemy-memory.readthedocs.io/en/latest/)
+👉 [See the official documentation for usage examples](https://sqlalchemy-memory.readthedocs.io/en/latest/)
 
-## Testing
+## 🧪 Testing
 
 Simply run `make tests`
 
-## License
+## 📄 License
 
 This project is licensed under the MIT License.
 See [LICENSE](LICENSE) for details.
